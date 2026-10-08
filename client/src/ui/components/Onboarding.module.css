@@ -1,0 +1,512 @@
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.scrimTop,
+.scrimLeft,
+.scrimRight,
+.scrimBottom {
+  position: fixed;
+  background: rgb(0 0 0 / 72%);
+  backdrop-filter: grayscale(0.65) blur(1.5px);
+}
+
+.scrimTop {
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.scrimLeft {
+  left: 0;
+}
+
+.scrimRight {
+  right: 0;
+}
+
+.scrimBottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+.scrimTop,
+.scrimLeft,
+.scrimRight,
+.scrimBottom {
+  pointer-events: auto;
+}
+
+.spotlight,
+.spotlightGlow {
+  position: fixed;
+  border-radius: 14px;
+  pointer-events: none;
+  transition:
+    left 220ms var(--easing-smooth),
+    top 220ms var(--easing-smooth),
+    width 220ms var(--easing-smooth),
+    height 220ms var(--easing-smooth);
+}
+
+.spotlightGlow {
+  box-shadow:
+    0 0 12px 3px rgb(255 0 51 / 36%),
+    0 0 30px 8px rgb(255 0 51 / 20%),
+    0 0 58px 15px rgb(135 0 34 / 14%);
+}
+
+.spotlight {
+  padding: 2px;
+  border: 0;
+  background: linear-gradient(
+    135deg,
+    rgb(255 0 51 / 95%),
+    rgb(255 74 104 / 80%),
+    rgb(132 16 48 / 88%),
+    rgb(255 0 51 / 95%)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.skip {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  pointer-events: auto;
+}
+
+.skip:hover {
+  color: var(--color-text-primary);
+  background: rgb(255 255 255 / 8%);
+}
+
+.prompt {
+  position: fixed;
+  left: 50%;
+  bottom: 116px;
+  width: min(560px, calc(100vw - 48px));
+  padding: 12px 24px;
+  transform: translateX(-50%);
+  text-align: center;
+  filter: drop-shadow(0 4px 18px rgb(0 0 0 / 95%));
+}
+
+.step {
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.prompt p {
+  margin: 9px 0 0;
+  color: #fff;
+  font-size: 18px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.45;
+  text-shadow:
+    0 0 7px rgb(255 255 255 / 80%),
+    0 0 18px rgb(255 255 255 / 54%),
+    0 0 34px rgb(255 0 51 / 30%);
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 3px;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent);
+  vertical-align: -0.12em;
+  animation: blink 700ms steps(1) infinite;
+}
+
+.shortcut {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 3px 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 5px;
+  background: rgb(18 18 18 / 82%);
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  box-shadow: 0 0 14px rgb(0 0 0 / 55%);
+}
+
+.completeToast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 1100;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 30px 44px;
+  color: var(--color-text-primary);
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  isolation: isolate;
+  animation: completeToast 3400ms var(--easing-smooth) both;
+}
+
+.completeToast::before {
+  content: "";
+  position: absolute;
+  inset: -70px -100px;
+  z-index: -2;
+  background: radial-gradient(
+    ellipse at center,
+    rgb(255 0 51 / 22%) 0%,
+    rgb(255 0 51 / 8%) 36%,
+    transparent 70%
+  );
+  animation: completeGlow 3400ms var(--easing-smooth) both;
+}
+
+.completeLabel {
+  color: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-shadow: 0 0 16px rgb(255 0 51 / 70%);
+}
+
+.completeToast strong {
+  color: #fff;
+  font-size: 36px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.035em;
+  text-shadow:
+    0 0 8px rgb(255 255 255 / 78%),
+    0 0 24px rgb(255 255 255 / 44%),
+    0 0 46px rgb(255 0 51 / 48%);
+}
+
+.welcome {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 44%, rgb(255 38 76 / 20%), transparent 26%),
+    linear-gradient(145deg, #090103 0%, #170006 48%, #050000 100%);
+  animation: welcomeScreen 2600ms var(--easing-smooth) both;
+}
+
+.welcome::before {
+  content: "";
+  position: absolute;
+  width: min(72vw, 760px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 210deg,
+    transparent 0deg,
+    rgb(255 0 51 / 22%) 70deg,
+    rgb(255 76 103 / 8%) 120deg,
+    transparent 190deg
+  );
+  filter: blur(56px);
+  animation: welcomeDrift 2600ms ease-in-out both;
+}
+
+.welcomeAmbient {
+  position: absolute;
+  inset: -30%;
+  background:
+    linear-gradient(115deg, transparent 43%, rgb(255 0 51 / 5%) 50%, transparent 57%),
+    repeating-linear-gradient(
+      125deg,
+      transparent 0,
+      transparent 68px,
+      rgb(255 255 255 / 1.5%) 69px,
+      transparent 70px
+    );
+  transform: rotate(-5deg);
+}
+
+.welcomeText {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: welcomeText 2600ms var(--easing-smooth) both;
+}
+
+.welcomeText span {
+  color: rgb(255 255 255 / 64%);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.welcomeText strong {
+  color: #fff;
+  font-size: clamp(34px, 5vw, 54px);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.045em;
+  text-shadow:
+    0 0 10px rgb(255 255 255 / 70%),
+    0 0 30px rgb(255 255 255 / 32%),
+    0 0 62px rgb(255 0 51 / 55%);
+}
+
+.keychainNotice {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 32px;
+  background:
+    radial-gradient(circle at 50% 42%, rgb(255 38 76 / 18%), transparent 30%),
+    linear-gradient(145deg, #090103 0%, #170006 48%, #050000 100%);
+}
+
+.keychainAmbient {
+  position: absolute;
+  inset: -30%;
+  background:
+    linear-gradient(115deg, transparent 43%, rgb(255 0 51 / 5%) 50%, transparent 57%),
+    repeating-linear-gradient(
+      125deg,
+      transparent 0,
+      transparent 68px,
+      rgb(255 255 255 / 1.5%) 69px,
+      transparent 70px
+    );
+  transform: rotate(-5deg);
+}
+
+.keychainCard {
+  position: relative;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: var(--radius-lg);
+  background: rgb(12 5 7 / 88%);
+  box-shadow: 0 28px 80px rgb(0 0 0 / 55%);
+  text-align: center;
+  backdrop-filter: blur(18px);
+}
+
+.keychainIcon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 20px;
+  border: 1px solid rgb(255 0 51 / 42%);
+  border-radius: var(--radius-full);
+  background: rgb(255 0 51 / 12%);
+  color: var(--color-accent);
+  box-shadow: 0 0 28px rgb(255 0 51 / 18%);
+}
+
+.keychainCard h1 {
+  margin: 10px 0 14px;
+  color: #fff;
+  font-size: clamp(26px, 4vw, 36px);
+  letter-spacing: -0.035em;
+}
+
+.keychainCard p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+}
+
+.keychainCard p + p {
+  margin-top: 12px;
+}
+
+.keychainCard button {
+  min-width: 150px;
+  min-height: 42px;
+  margin-top: 28px;
+  padding: 0 22px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.keychainCard button:hover {
+  background: transparent;
+  color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.keychainCard button:active {
+  transform: translateY(0);
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes completeToast {
+  0% {
+    opacity: 0;
+    filter: blur(8px);
+    transform: translate(-50%, calc(-50% + 16px)) scale(0.9);
+  }
+
+  16%,
+  78% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translate(-50%, calc(-50% - 12px)) scale(1.04);
+  }
+}
+
+@keyframes completeGlow {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+
+  20%,
+  74% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes welcomeScreen {
+  0%,
+  78% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes welcomeText {
+  0% {
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(12px) scale(0.96);
+  }
+
+  22%,
+  70% {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateY(-8px) scale(1.02);
+  }
+}
+
+@keyframes welcomeDrift {
+  from {
+    transform: translate3d(-4%, 3%, 0) scale(0.92);
+  }
+
+  to {
+    transform: translate3d(5%, -3%, 0) scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotlight {
+    transition: none;
+  }
+
+  .spotlightGlow {
+    transition: none;
+  }
+
+  .caret {
+    animation: none;
+  }
+
+  .completeToast {
+    animation-duration: 3400ms;
+    animation-name: completeToastReduced;
+  }
+
+  .completeToast::before {
+    animation: none;
+    opacity: 1;
+  }
+
+  .welcome,
+  .welcome::before,
+  .welcomeText {
+    animation-duration: 2600ms;
+  }
+}
+
+@keyframes completeToastReduced {
+  0%,
+  100% {
+    opacity: 0;
+  }
+
+  10%,
+  85% {
+    opacity: 1;
+  }
+}

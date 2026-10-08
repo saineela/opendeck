@@ -1,0 +1,111 @@
+.seekBar {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+
+.timeDisplay {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: center;
+  opacity: 0;
+  position: absolute;
+  top: -20px;
+  background: var(--color-bg-elevated);
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: opacity 150ms ease;
+  pointer-events: none;
+}
+
+.timeDisplay:first-child {
+  left: 0;
+}
+
+.timeDisplay:last-child {
+  right: 0;
+}
+
+.seekBar:hover .timeDisplay {
+  opacity: 1;
+}
+
+.seekSlider {
+  flex: 1;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 32px;
+}
+
+.seekSlider::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--color-slider-fill) 0 var(--slider-progress),
+    var(--color-slider-track) var(--slider-progress) 100%
+  );
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.seekSlider::-moz-range-track {
+  background: var(--color-slider-track);
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.seekSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--color-slider-thumb);
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -5.5px;
+  transition: transform 140ms ease;
+}
+
+.seekSlider::-moz-range-progress {
+  background: var(--color-slider-fill);
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.seekSlider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--color-slider-thumb);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 140ms ease;
+}
+
+.seekSlider:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.seekSlider:hover::-moz-range-thumb {
+  transform: scale(1.15);
+}
+
+.seekSlider:focus-visible {
+  outline: 2px solid var(--color-text-primary);
+  outline-offset: 2px;
+}
+
+.seekSlider:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}

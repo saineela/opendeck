@@ -1,0 +1,65 @@
+.badge {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  transform: translateZ(0);
+}
+
+.hiddenBadge {
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform 160ms var(--easing-spring);
+}
+
+:global(button:hover) .hiddenBadge,
+.hiddenBadge:focus-visible {
+  opacity: 1;
+}
+
+.hiddenBadge:hover,
+.hiddenBadge:focus-visible {
+  background: var(--color-control-hover);
+  color: var(--color-text-primary);
+  outline: 0;
+}
+
+.hiddenBadge:active {
+  transform: scale(0.88);
+}
+
+.ready {
+  color: var(--color-text-primary);
+}
+
+.failed {
+  color: var(--color-text-secondary);
+}
+
+.downloading,
+.queued,
+.paused {
+  color: var(--color-text-primary);
+}
+
+.spinner {
+  animation: downloaderSpin 820ms linear infinite;
+}
+
+@keyframes downloaderSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}

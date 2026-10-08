@@ -1,0 +1,255 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: min(18vh, 150px) 24px 24px;
+  background: rgba(0, 0, 0, 0.42);
+  animation: backdropIn 120ms var(--easing-smooth);
+}
+
+.panel {
+  width: min(620px, 100%);
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 18px;
+  background: rgba(24, 24, 26, 0.7);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(30px) saturate(135%);
+  -webkit-backdrop-filter: blur(30px) saturate(135%);
+  animation: panelIn 150ms var(--easing-smooth);
+}
+
+.inputRow {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.inputRow input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 19px;
+}
+
+.inputRow input::placeholder {
+  color: #777;
+}
+
+.loading,
+.hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.result,
+.suggestion,
+.recent {
+  width: calc(100% - 16px);
+  margin: 8px;
+  display: flex;
+  align-items: center;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.result {
+  min-height: 70px;
+  gap: 12px;
+  padding: 8px;
+}
+
+.artwork {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--color-bg-overlay);
+}
+
+.artwork img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.trackText {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.trackText strong,
+.trackText span,
+.recent span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trackText span {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.recents {
+  padding: 2px 0 8px;
+}
+
+.suggestions {
+  padding: 0 0 8px;
+}
+
+.suggestion {
+  min-height: 38px;
+  gap: 11px;
+  padding: 0 12px;
+  color: var(--color-text-secondary);
+}
+
+.suggestion span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recents p {
+  margin: 10px 18px 4px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.recent {
+  min-height: 42px;
+  color: var(--color-text-secondary);
+}
+
+.recentSearchButton {
+  min-width: 0;
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  padding: 0 12px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.recentSearchButton span {
+  min-width: 0;
+  flex: 1;
+}
+
+.removeRecentButton {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  margin-right: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.recent:hover .removeRecentButton,
+.removeRecentButton:focus-visible {
+  opacity: 1;
+}
+
+.removeRecentButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary);
+}
+
+.selected {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.inputRow.selected {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.footer {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 640px) {
+  .backdrop {
+    padding: 0;
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  .panel {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: rgba(18, 18, 20, 0.86);
+  }
+
+  .inputRow {
+    min-height: 70px;
+  }
+
+  .footer {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .panel {
+    animation: none;
+  }
+}

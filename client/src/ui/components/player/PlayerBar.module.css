@@ -1,0 +1,327 @@
+.playerBar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 88px;
+  background: var(--color-player-chrome);
+  border-top: 1px solid var(--color-border);
+  backdrop-filter: blur(26px) saturate(120%);
+  box-shadow: var(--shadow-chrome);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+
+}
+
+:global(html[data-app-theme="glass"]) .playerBar {
+  left: 18px;
+  right: 18px;
+  bottom: 16px;
+  height: 86px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 13%), transparent 58%),
+    linear-gradient(110deg, rgb(246 195 122 / 11%), rgb(190 137 255 / 8%) 48%, rgb(91 202 183 / 8%)),
+    var(--color-player-chrome);
+  backdrop-filter: blur(38px) saturate(155%) contrast(1.08);
+  -webkit-backdrop-filter: blur(38px) saturate(155%) contrast(1.08);
+  box-shadow:
+    0 22px 62px rgb(7 4 12 / 42%),
+    0 4px 16px rgb(246 195 122 / 8%),
+    inset 0 1px 0 rgb(255 255 255 / 22%),
+    inset 0 -1px 0 rgb(255 255 255 / 7%);
+}
+
+:global(html[data-app-theme="glass"]) .playerBar::before {
+  content: "";
+  position: absolute;
+  inset: 1px 1px auto;
+  height: 34px;
+  border-radius: 19px 19px 12px 12px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 18%), transparent);
+  pointer-events: none;
+}
+
+.offlinePrompt {
+  position: fixed;
+  left: 50%;
+  bottom: 106px;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(480px, calc(100% - 32px));
+  padding: 6px 7px 6px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: blur(20px) saturate(125%);
+  transform: translateX(-50%);
+  animation: offlinePromptIn 180ms ease-out;
+}
+
+.offlineMessage {
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reconnectButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 13px 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-text-on-accent);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.reconnectButton:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  transform: translateY(-1px);
+}
+
+.reconnectButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.reconnectButton:focus-visible {
+  outline: 2px solid rgb(255 255 255 / 85%);
+  outline-offset: 2px;
+}
+
+.reconnectButton:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.checkingIcon {
+  animation: checkingPulse 750ms ease-in-out infinite alternate;
+}
+
+@keyframes offlinePromptIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes checkingPulse {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+.seekBarContainer {
+  width: 100%;
+  height: 4px;
+  position: relative;
+  top: -2px;
+}
+
+:global(html[data-app-theme="glass"]) .seekBarContainer {
+  width: calc(100% - 26px);
+  margin: 0 auto;
+  top: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.controlsRow {
+  display: flex;
+  align-items: center;
+  height: 84px;
+  padding: 16px;
+  gap: 16px;
+  position: relative;
+}
+
+.leftSection {
+  display: flex;
+  align-items: center;
+  position: absolute;
+  left: 16px;
+  right: calc(50% + 104px);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.centerSection {
+  display: flex;
+  align-items: center;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.rightSection {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  position: absolute;
+  right: 16px;
+  gap: 8px;
+}
+
+.volumeControlsWrapper {
+  --extra-control-gap: 8px;
+
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--extra-control-gap);
+}
+
+.controlsHoverOnly::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: calc((36px * 2) + (var(--extra-control-gap) * 2));
+  height: 52px;
+  transform: translateY(-50%);
+}
+
+.expandedControls {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translate(0, -50%) scale(1);
+  display: flex;
+  align-items: center;
+  gap: var(--extra-control-gap);
+  padding-right: var(--extra-control-gap);
+  opacity: 1;
+  pointer-events: auto;
+  transition: opacity 180ms ease, transform 180ms ease;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+.controlsHoverOnly .expandedControls {
+  opacity: 0;
+  transform: translate(14px, -50%) scale(0.92);
+  pointer-events: none;
+}
+
+.controlsHoverOnly:hover .expandedControls,
+.controlsHoverOnly:focus-within .expandedControls {
+  opacity: 1;
+  transform: translate(0, -50%) scale(1);
+  pointer-events: auto;
+  
+}
+
+.iconButton {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease, transform 100ms ease, border-color 120ms ease;
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background: var(--color-control-hover);
+}
+
+.iconButton:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.iconButton:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.activeControl {
+  color: var(--color-text-primary);
+  background: var(--color-control-active);
+  border-color: var(--color-border);
+}
+
+/* Responsive adjustments */
+@media (max-width: 800px) {
+  .controlsRow {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .leftSection {
+    left: 12px;
+    right: calc(50% + 98px);
+  }
+}
+
+@media (max-width: 600px) {
+  .offlinePrompt {
+    bottom: 96px;
+    gap: 9px;
+    padding-left: 13px;
+  }
+
+  .offlineMessage {
+    font-size: var(--font-size-xs);
+  }
+
+  .reconnectButton {
+    padding-right: 10px;
+    font-size: var(--font-size-xs);
+  }
+
+  .playerBar {
+    height: 80px;
+  }
+
+  :global(html[data-app-theme="glass"]) .playerBar {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    height: 80px;
+    border-radius: 16px;
+  }
+
+  .controlsRow {
+    height: 76px;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .leftSection {
+    left: 8px;
+    right: calc(50% + 94px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .offlinePrompt,
+  .checkingIcon {
+    animation: none;
+  }
+}
+
+
+/* The wrapper holding your Expanded Player */
