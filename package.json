@@ -1,0 +1,23 @@
+{
+  "name": "just-another-music-client-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "start": "npm run start -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "test": "npm run test -w server && npm run test -w client",
+    "test:e2e": "playwright test",
+    "test:all": "npm run test && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "concurrently": "^9.1.2"
+  }
+}

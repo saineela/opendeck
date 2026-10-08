@@ -1,0 +1,113 @@
+.volumeControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 120px;
+}
+
+.muteButton {
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background-color 120ms ease, transform 100ms ease;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+}
+
+.muteButton:hover:not(:disabled) {
+  background: var(--color-control-hover);
+}
+
+.muteButton:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.muteButton:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.muteButton:focus-visible {
+  outline: 2px solid var(--color-text-primary);
+  outline-offset: 2px;
+}
+
+.volumeSlider {
+  flex: 1;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 24px;
+}
+
+.volumeSlider::-webkit-slider-runnable-track {
+  background: linear-gradient(
+    to right,
+    var(--color-slider-fill) 0 var(--slider-progress),
+    var(--color-slider-track) var(--slider-progress) 100%
+  );
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.volumeSlider::-moz-range-track {
+  background: var(--color-slider-track);
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.volumeSlider::-moz-range-progress {
+  background: var(--color-slider-fill);
+  height: 3px;
+  border-radius: 1.5px;
+}
+
+.volumeSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--color-slider-thumb);
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -4.5px;
+  transition: transform 120ms ease;
+}
+
+.volumeSlider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: var(--color-slider-thumb);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+
+.volumeSlider:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+
+.volumeSlider:hover::-moz-range-thumb {
+  transform: scale(1.2);
+}
+
+.volumeSlider:focus-visible {
+  outline: 2px solid var(--color-text-primary);
+  outline-offset: 2px;
+}
+
+.volumeSlider:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}

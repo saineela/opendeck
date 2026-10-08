@@ -1,0 +1,160 @@
+.root {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transform: translateZ(0);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform 160ms var(--easing-spring);
+}
+
+.button:hover,
+.button:focus-visible,
+.buttonActive {
+  background: var(--color-control-hover);
+  color: var(--color-text-primary);
+  outline: 0;
+}
+
+.button:active {
+  transform: scale(0.9);
+}
+
+.panel {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 252px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-panel);
+  transform-origin: top right;
+  animation: downloadsPanelAppear 170ms var(--easing-smooth);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  color: var(--color-text-primary);
+}
+
+.panelAction {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 0 var(--spacing-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    transform 160ms var(--easing-spring);
+}
+
+.panelAction:hover,
+.panelAction:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-control-hover);
+  outline: 0;
+}
+
+.panelAction:active {
+  transform: scale(0.94);
+}
+
+.activeDownload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.activeDownload span,
+.queue span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.progressTrack {
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--color-slider-track);
+}
+
+.progressTrack span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--color-slider-thumb);
+  transition: width 180ms var(--easing-smooth);
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+}
+
+.spinner {
+  animation: downloadsPopoverSpin 820ms linear infinite;
+}
+
+@keyframes downloadsPopoverSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes downloadsPanelAppear {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .panel {
+    animation: none;
+  }
+}

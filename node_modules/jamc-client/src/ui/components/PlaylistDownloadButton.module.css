@@ -1,0 +1,80 @@
+.button {
+  width: 42px;
+  height: 42px;
+  display: inline-grid;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transform: translateZ(0);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform 160ms var(--easing-spring);
+}
+
+.button:hover:not(:disabled),
+.button:focus-visible:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-bg-overlay);
+  color: var(--color-accent);
+  outline: 0;
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.busy {
+  color: var(--color-text-primary);
+}
+
+.complete {
+  color: var(--color-text-primary);
+}
+
+.starting {
+  background: var(--color-control-active);
+  color: var(--color-text-primary);
+}
+
+.spinner {
+  animation: downloadButtonSpin 820ms linear infinite;
+}
+
+.pauseIcon {
+  animation: downloadButtonPauseSettle 180ms var(--easing-spring);
+}
+
+@keyframes downloadButtonSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes downloadButtonPauseSettle {
+  from {
+    opacity: 0.5;
+    transform: scale(0.78);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .pauseIcon {
+    animation: none;
+  }
+}
