@@ -1,5 +1,5 @@
 {
-  "name": "jamc-client",
+  "name": "opendeck-client",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@tabler/icons-react": "^3.44.0",
     "bgutils-js": "^4.0.2",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "youtubei.js": "^17.0.1"

@@ -10,14 +10,31 @@ import { originCheck } from "./middleware/security.js";
 import { createAuthRoutes } from "./routes/auth.js";
 import { createYoutubeAuthRoutes } from "./routes/youtubeAuth.js";
 import { createProxyRoutes } from "./routes/proxy.js";
-import { createCacheRoutes, createLastFmRoutes, createSettingsRoutes } from "./routes/data.js";
+import { createCacheRoutes, createSettingsRoutes } from "./routes/data.js";
+import { createLibraryRoutes } from "./routes/library.js";
+import { createFeedRoutes } from "./routes/feed.js";
+import { createApiKeysRoutes } from "./routes/apiKeys.js";
+import { createAdminRoutes } from "./routes/admin.js";
+import { createHistoryRoutes } from "./routes/history.js";
 import { createMediaRoutes } from "./routes/media.js";
+import { createRecommendationsRoutes, createPushRoutes } from "./routes/recommendations.js";
+import { renderApiDocsPage } from "./services/apiDocs.js";
 import { configureProxyHosts } from "./services/proxy.js";
 import { logger } from "./logger.js";
 
 function resolveClientDist(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../client/dist");
+}
+
+function resolveTestAppDir(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "../../test-app");
+}
+
+function resolveApiMarkdown(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "../../docs/API.md");
 }
 
 export function createApp(config: ServerConfig, db: Db): Express {
@@ -79,12 +96,35 @@ export function createApp(config: ServerConfig, db: Db): Express {
   app.use("/api/yt/proxy", createProxyRoutes(db, config));
   app.use("/api/cache", createCacheRoutes(db));
   app.use("/api/settings", createSettingsRoutes(db));
-  app.use("/api/lastfm", createLastFmRoutes(db, config));
-  app.use("/api/media", createMediaRoutes());
+  app.use("/api/library", createLibraryRoutes(db));
+  app.use("/api/history", createHistoryRoutes(db));
+  app.use("/api/feed", createFeedRoutes(db, config));
+  app.use("/api/keys", createApiKeysRoutes(db));
+  app.use("/api/admin", createAdminRoutes(db, config));
+  app.use("/api/media", createMediaRoutes(db));
+  app.use("/api/recommendations", createRecommendationsRoutes(db));
+  app.use("/api/push", createPushRoutes(db));
 
   app.use("/api", (_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found." });
   });
+
+  // Rendered API reference (docs/API.md) — public on purpose: it documents
+  // the interface, never instance data.
+  app.get("/docs", (_req: Request, res: Response) => {
+    try {
+      const markdown = fs.readFileSync(resolveApiMarkdown(), "utf8");
+      res.status(200).type("html").send(renderApiDocsPage(markdown));
+    } catch (error) {
+      logger.warn("docs.render failed", { error });
+      res.status(500).json({ error: "Documentation is unavailable." });
+    }
+  });
+
+  // Bare API test client. Served from this origin so session cookies and the
+  // CSRF origin check behave exactly as they do for the real client; it talks
+  // to nothing but this server's own endpoints.
+  app.use("/test-app", express.static(resolveTestAppDir()));
 
   if (config.serveClient) {
     const distDir = resolveClientDist();
@@ -112,6 +152,19 @@ export function createApp(config: ServerConfig, db: Db): Express {
   }
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // body-parser failures (malformed/oversized/unsupported-charset JSON) are
+    // client errors — surface their real status instead of a blanket 500.
+    const bodyError = error as { type?: string; status?: number; statusCode?: number };
+    if (typeof bodyError?.type === "string" && bodyError.type.startsWith("entity.")) {
+      const status = bodyError.status ?? bodyError.statusCode ?? 400;
+      res.status(status).json({
+        error:
+          bodyError.type === "entity.too.large"
+            ? "Request body too large."
+            : "Invalid JSON body.",
+      });
+      return;
+    }
     logger.error("server.unhandled_error", { error });
     if (res.headersSent) return;
     res.status(500).json({ error: "Internal server error." });

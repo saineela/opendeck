@@ -19,12 +19,12 @@
   align-items: center;
   gap: 12px;
   padding: 10px 10px 10px 14px;
-  border: 1px solid rgb(255 49 90 / 26%);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 26%, transparent);
   border-radius: var(--radius-lg);
-  background: rgb(17 17 17 / 94%);
+  background: var(--color-panel-chrome);
   box-shadow:
     0 18px 48px rgb(0 0 0 / 46%),
-    inset 0 1px 0 rgb(255 255 255 / 5%);
+    inset 0 1px 0 color-mix(in srgb, var(--color-text-primary) 5%, transparent);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   animation: toastIn 180ms var(--easing-smooth) both;
@@ -33,7 +33,7 @@
 
 .icon {
   flex: 0 0 auto;
-  color: #ff7892;
+  color: var(--color-accent);
 }
 
 .message {
@@ -100,8 +100,8 @@
 
 .iconButton:hover,
 .closeButton:hover {
-  background: rgb(255 255 255 / 8%);
-  color: #fff;
+  background: var(--color-control-hover);
+  color: var(--color-text-primary);
 }
 
 .iconButton:focus-visible,

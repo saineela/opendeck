@@ -83,16 +83,3 @@ export async function setAppSetting<T>(key: string, value: T): Promise<void> {
 export async function removeAppSetting(key: string): Promise<void> {
   await postSettings("remove", { key });
 }
-
-export async function clearAppSettings(): Promise<void> {
-  if (remoteState === "disabled") return;
-  if ((await waitForAuthVerdict()) === "disabled") return;
-  const response = await fetch("/api/settings/clear", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-  });
-  if (response.ok || response.status === 401) return;
-  const body = (await response.json().catch(() => null)) as { error?: string } | null;
-  throw new Error(body?.error ?? `HTTP ${response.status}`);
-}

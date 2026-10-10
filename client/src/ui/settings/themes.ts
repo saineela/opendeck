@@ -8,7 +8,19 @@ import {
 } from "../../internal/durableLocalSetting";
 import { logInternalWarn } from "../../internal/logging";
 
-export type AppTheme = "dark" | "light" | "glass" | "matrix" | "custom";
+export type AppTheme =
+  | "dark"
+  | "light"
+  | "glass"
+  | "matrix"
+  | "sakura"
+  | "tokyo"
+  | "ghibli"
+  | "cel"
+  | "sunset"
+  | "ocean"
+  | "nordic"
+  | "custom";
 export interface MatrixThemeSettings {
   rainSpeed: number;
   mediaAging: number;
@@ -19,27 +31,55 @@ export interface GlassThemeSettings {
 
 export const APP_THEMES: Array<{ id: AppTheme; label: string }> = [
   {
-    id: "dark",
-    label: "Dark",
+    id: "light",
+    label: "Daylight",
   },
   {
-    id: "light",
-    label: "Light",
+    id: "dark",
+    label: "Midnight",
   },
-  // Glass is kept in the theme system, but hidden from the picker for now.
-  // {
-  //   id: "glass",
-  //   label: "Glass",
-  // },
+  {
+    id: "glass",
+    label: "Prism",
+  },
   {
     id: "matrix",
-    label: "Matrix",
+    label: "Terminal",
+  },
+  {
+    id: "sakura",
+    label: "Sakura",
+  },
+  {
+    id: "tokyo",
+    label: "Neon Tokyo",
+  },
+  {
+    id: "ghibli",
+    label: "Ghibli",
+  },
+  {
+    id: "cel",
+    label: "Cel Shade",
+  },
+  {
+    id: "sunset",
+    label: "Sunset",
+  },
+  {
+    id: "ocean",
+    label: "Deep Sea",
+  },
+  {
+    id: "nordic",
+    label: "Nordic",
   },
   {
     id: "custom",
     label: "Custom CSS",
   },
 ];
+
 
 const STORAGE_KEY = "app-theme";
 const CHANGE_EVENT = "app-theme-change";
@@ -67,6 +107,13 @@ function isAppTheme(value: unknown): value is AppTheme {
     || value === "light"
     || value === "glass"
     || value === "matrix"
+    || value === "sakura"
+    || value === "tokyo"
+    || value === "ghibli"
+    || value === "cel"
+    || value === "sunset"
+    || value === "ocean"
+    || value === "nordic"
     || value === "custom";
 }
 
@@ -100,7 +147,9 @@ function readAppTheme(): AppTheme {
   const stored = readLocalJsonSetting(STORAGE_KEY, (value): value is AppTheme | "default" =>
     isAppTheme(value) || value === "default"
   );
-  return stored === "default" ? "dark" : stored ?? "dark";
+  // Light is the default face of the app; "default" is a legacy value that
+  // used to resolve to the old dark palette.
+  return stored === "default" ? "light" : stored ?? "light";
 }
 
 function normalizeGlassThemeSettings(settings: Partial<GlassThemeSettings>): GlassThemeSettings {
@@ -320,7 +369,7 @@ export function getAppTheme() {
 }
 
 export function useAppTheme() {
-  return useSyncExternalStore(subscribeToAppTheme, readAppTheme, () => "dark");
+  return useSyncExternalStore(subscribeToAppTheme, readAppTheme, () => "light");
 }
 
 export function useMatrixThemeSettings() {

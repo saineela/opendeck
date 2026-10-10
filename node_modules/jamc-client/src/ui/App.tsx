@@ -6,6 +6,8 @@ import { AlbumView } from "./pages/AlbumView";
 import { PlaylistView } from "./pages/PlaylistView";
 import { SearchResultsPage } from "./pages/SearchResultsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { HistoryPage } from "./pages/HistoryPage";
+import { RecommendationsPage } from "./pages/RecommendationsPage";
 import { LyricsView } from "./pages/LyricsView";
 import { ArtistView } from "./pages/ArtistView";
 import { SearchOverlay } from "./components/SearchOverlay";
@@ -27,20 +29,22 @@ import {
   usePlayerState,
 } from "../player/playerStore";
 import styles from "./App.module.css";
-import { clearAppSession, loadAppSession, saveAppSession } from "../player/appSession";
+import { loadAppSession, saveAppSession } from "../player/appSession";
 import { useMediaSession } from "../player/useMediaSession";
-import { LastFmService } from "../player/LastFm";
 import { playerUIStore, usePlayerUIState } from "./stores/playerUIStore";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { ErrorToastViewport } from "./components/ErrorToastViewport";
 import {
-  clearAppSettings,
   getAppSetting,
   removeAppSetting,
   setAppSetting,
 } from "../internal/appSettings";
-import { clearCache } from "../internal/cache";
-import { refreshAuthSession } from "../auth/authClient";
+import { refreshAuthSession, getAuthSnapshot, useAuth } from "../auth/authClient";
+import {
+  pushSupported,
+  registerServiceWorker,
+} from "../internal/recommendationsClient";
+import { LoginPage } from "./pages/LoginPage";
 import {
   Onboarding,
   OnboardingCompleteToast,
@@ -53,7 +57,6 @@ import {
   useKeyboardShortcuts,
   type KeyboardShortcutAction,
 } from "./settings/keyboardShortcuts";
-import { useLastFmScrobblingEnabled } from "./settings/lastfm";
 import { hydratePlaybackSettings } from "../player/playbackSettings";
 import { appErrorManager } from "./errors/errorManager";
 const restoredSession = loadAppSession();
@@ -78,8 +81,14 @@ const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
   "tab9",
 ];
 
+/** Tabs outside the player's music-tab rotation (no queue, no back-stack). */
+function isUtilityTab(tab: Tab): boolean {
+  return tab.view === "settings" || tab.view === "history" || tab.view === "recommendations";
+}
+
 function getNavigationState(tab: Tab): TabViewState | null {
-  if (tab.view === "settings") return null;
+  // Explicit union checks (not isUtilityTab) so tab.view narrows.
+  if (tab.view === "settings" || tab.view === "history" || tab.view === "recommendations") return null;
 
   return {
     title: tab.title,
@@ -163,12 +172,12 @@ async function hasStoredYoutubeSession(): Promise<boolean> {
 
 export default function App() {
   useDisableContextMenu();
+  const auth = useAuth();
   const libraryState = useLibraryState();
   const playerState = usePlayerState();
   const playerSession = usePlayerSession();
   const playerUIState = usePlayerUIState();
   const keyboardShortcuts = useKeyboardShortcuts();
-  const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
 
   const [tabs, setTabs] = useState<Tab[]>(
     () => restoredSession?.tabs.map(stripNavigationHistory) ?? [{ id: "1", view: "home" }],
@@ -206,16 +215,35 @@ export default function App() {
     };
   }, []);
   const [isExpandedPlayerBar,setIsExpandedPlayerBar]=  useState(false)
+  // Which top-level route the shell is on (the app itself is "/", the
+  // branded sign-in page is "/login"); no router — pushState + popstate.
+  const [routePath, setRoutePath] = useState(() => window.location.pathname);
+  useEffect(() => {
+    const onPopState = (): void => setRoutePath(window.location.pathname);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  const navigateTo = useCallback((to: string, replace = false): void => {
+    if (replace) window.history.replaceState({}, "", to);
+    else window.history.pushState({}, "", to);
+    setRoutePath(to);
+  }, []);
+  // The app is gated: without an account session the only surface that
+  // exists is the branded sign-in page. Keep the URL honest so reloads,
+  // deep links, and the back button all agree with what is on screen.
+  useEffect(() => {
+    if (auth.status === "signed-out" && routePath !== "/login") {
+      navigateTo("/login", true);
+    }
+  }, [auth.status, navigateTo, routePath]);
   const loadingScreenDismissedRef = useRef(false);
   const loadingScreenStartedAtRef = useRef(performance.now());
   const lastErrorNotificationRef = useRef<string | null>(null);
   const sessionStateRef = useRef({ tabs, activeTabId, nextTabId });
-  const sessionPersistenceDisabledRef = useRef(false);
   const sleepRecoveryLastTickRef = useRef(Date.now());
   const sleepRecoveryReloadingRef = useRef(false);
   sessionStateRef.current = { tabs, activeTabId, nextTabId };
   const persistAppSession = useCallback(() => {
-    if (sessionPersistenceDisabledRef.current) return;
     const current = sessionStateRef.current;
     saveAppSession({
       version: 1,
@@ -403,39 +431,6 @@ export default function App() {
 
   useMediaSession(playerState, playerController);
 
-  useEffect(() => {
-    if (!lastFmScrobblingEnabled || !playerState.currentTrack) {
-      LastFmService.updatePlayback({
-        track: playerState.currentTrack,
-        status: playerState.status,
-        currentTime: playerController.getCurrentTime(),
-        duration: playerController.getDuration(),
-        enabled: lastFmScrobblingEnabled,
-      });
-      return;
-    }
-
-    const syncLastFm = () => {
-      LastFmService.updatePlayback({
-        track: playerState.currentTrack,
-        status: playerState.status,
-        currentTime: playerController.getCurrentTime(),
-        duration: playerController.getDuration(),
-        enabled: lastFmScrobblingEnabled,
-      });
-    };
-
-    syncLastFm();
-    if (playerState.status !== "playing") return;
-
-    const intervalId = window.setInterval(syncLastFm, 1000);
-    return () => window.clearInterval(intervalId);
-  }, [
-    lastFmScrobblingEnabled,
-    playerState.currentTrack,
-    playerState.status,
-  ]);
-
   const activeViewKey = [
     activeTabId,
     activeTab?.view,
@@ -455,6 +450,17 @@ export default function App() {
 
   useEffect(() => {
     void libraryController.initialize();
+  }, []);
+
+  useEffect(() => {
+    // Keep the Web Push service worker registered on every launch so a device
+    // that already granted notification permission keeps receiving
+    // recommendation pushes without opening the Recommendations tab.
+    if (!pushSupported()) return;
+    if (Notification.permission !== "granted") return;
+    void registerServiceWorker().catch(() => {
+      // Best-effort: push stays off if registration fails (e.g. no HTTPS).
+    });
   }, []);
 
   useEffect(() => {
@@ -568,50 +574,13 @@ export default function App() {
     };
   }, [persistAppSession]);
 
-  const handleDeleteAllAppData = useCallback(async () => {
-    sessionPersistenceDisabledRef.current = true;
-    playerUIStore.setLyricsOpen(false);
-    setIsSearchOpen(false);
-    setShowQueueMounted(false);
-    setOnboardingComplete(null);
-    setOnboardingStep(null);
-    setShowOnboardingComplete(false);
-    setShowOnboardingWelcome(false);
-
-    tabManager.reset("1");
-    setTabs([{ id: "1", view: "home" }]);
-    setActiveTabId("1");
-    setNextTabId(2);
-    setSidebarWidth(240);
-    setQueuePanelWidth(340);
-    clearAppSession();
-
-    const results = await Promise.allSettled([
-      libraryController.signOut(),
-      clearCache(),
-      clearAppSettings(),
-    ]);
-
-    try {
-      localStorage.clear();
-    } catch {
-      clearLocalOnboardingComplete();
-      clearAppSession();
-    }
-
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed) {
-      throw failed.reason;
-    }
-  }, []);
-
   useEffect(() => {
     const tabId = tabManager.getActivePlayerId();
     if (!tabId) return;
 
     setTabs((prevTabs) =>
       prevTabs.map((tab) =>
-        tab.id === tabId && tab.view !== "settings"
+        tab.id === tabId && !isUtilityTab(tab)
           ? { ...tab, title: playerState.currentTrack?.title }
           : tab
       )
@@ -713,6 +682,12 @@ export default function App() {
   const handleCreateTab = () => createTab();
 
   const handleSignIn = async () => {
+    // No OpenDeck account yet: the branded /login page comes first, then
+    // the YouTube Music linking flow can follow if the user wants it.
+    if (!getAuthSnapshot().authenticated) {
+      navigateTo("/login");
+      return;
+    }
     await libraryController.signIn();
     if (libraryController.getState().status !== "ready") return;
 
@@ -726,6 +701,10 @@ export default function App() {
     ]);
     setActiveTabId(newId);
     setNextTabId((currentId) => currentId + 1);
+  };
+
+  const handleAuthSuccess = () => {
+    void libraryController.loadAppLibrary();
   };
 
   const handleSearch = (query: string, openInNewTab: boolean) => {
@@ -806,6 +785,34 @@ export default function App() {
     setNextTabId((currentId) => currentId + 1);
   };
 
+  const handleOpenHistory = () => {
+    playerUIStore.setLyricsOpen(false);
+    const historyTab = tabs.find((tab) => tab.view === "history");
+    if (historyTab) {
+      setActiveTabId(historyTab.id);
+      return;
+    }
+
+    const newId = nextTabId.toString();
+    setTabs((prevTabs) => [...prevTabs, { id: newId, view: "history" }]);
+    setActiveTabId(newId);
+    setNextTabId((currentId) => currentId + 1);
+  };
+
+  const handleOpenRecommendations = () => {
+    playerUIStore.setLyricsOpen(false);
+    const recommendationsTab = tabs.find((tab) => tab.view === "recommendations");
+    if (recommendationsTab) {
+      setActiveTabId(recommendationsTab.id);
+      return;
+    }
+
+    const newId = nextTabId.toString();
+    setTabs((prevTabs) => [...prevTabs, { id: newId, view: "recommendations" }]);
+    setActiveTabId(newId);
+    setNextTabId((currentId) => currentId + 1);
+  };
+
   const handleCloseTab = (tabId: string) => {
     playerUIStore.setLyricsOpen(false);
     if (tabs.length === 1) return;
@@ -820,12 +827,12 @@ export default function App() {
       tabs
         .slice(0, closedIndex)
         .reverse()
-        .find((tab) => tab.id !== tabId && tab.view !== "settings") ??
+        .find((tab) => tab.id !== tabId && !isUtilityTab(tab)) ??
       tabs
         .slice(closedIndex + 1)
-        .find((tab) => tab.view !== "settings");
+        .find((tab) => !isUtilityTab(tab));
 
-    if (closedTab.view !== "settings" && tabManager.getActiveId() === tabId) {
+    if (!isUtilityTab(closedTab) && tabManager.getActiveId() === tabId) {
       if (replacementMusicTab) {
         void tabManager.setActive(replacementMusicTab.id);
       }
@@ -835,18 +842,18 @@ export default function App() {
       const playingTabId = tabManager.getActiveId();
       const playingTab = newTabs.find((tab) => tab.id === playingTabId);
 
-      if (closedTab.view === "settings" && playingTab) {
+      if (isUtilityTab(closedTab) && playingTab) {
         setActiveTabId(playingTab.id);
       } else {
         const nextTab = replacementMusicTab ?? newTabs[Math.max(0, closedIndex - 1)];
-        if (nextTab.view !== "settings" && tabManager.getActiveId() !== nextTab.id) {
+        if (!isUtilityTab(nextTab) && tabManager.getActiveId() !== nextTab.id) {
           void tabManager.setActive(nextTab.id);
         }
         setActiveTabId(nextTab.id);
       }
     }
 
-    if (closedTab.view !== "settings") {
+    if (!isUtilityTab(closedTab)) {
       tabManager.removeTab(tabId);
     }
     setTabs(newTabs);
@@ -855,7 +862,7 @@ export default function App() {
   const handleSwitchTab = (tabId: string) => {
     playerUIStore.setLyricsOpen(false);
     const tab = tabs.find((item) => item.id === tabId);
-    if (tab?.view !== "settings") {
+    if (tab && !isUtilityTab(tab)) {
       void tabManager.setActive(tabId);
     }
     setActiveTabId(tabId);
@@ -918,7 +925,7 @@ export default function App() {
   };
 
   const restartOnboarding = () => {
-    const firstMusicTab = tabs.find((tab) => tab.view !== "settings");
+    const firstMusicTab = tabs.find((tab) => !isUtilityTab(tab));
     if (!firstMusicTab) return;
     clearLocalOnboardingComplete();
     setOnboardingComplete(false);
@@ -1211,6 +1218,30 @@ export default function App() {
 
 
 
+  // Keep the boot screen up while the very first session check is in
+  // flight so signed-in users never see the gate flash.
+  if (auth.status === "loading") {
+    return <AppLoadingScreen isLeaving={false} />;
+  }
+
+  if (auth.status === "signed-out" || routePath === "/login") {
+    const signedIn = auth.status === "signed-in";
+    const leaveLogin = () => {
+      navigateTo("/", true);
+    };
+    return (
+      <LoginPage
+        onSignedIn={() => {
+          leaveLogin();
+          handleAuthSuccess();
+        }}
+        // While gated out there is no way back to the app: the cancel
+        // affordance only exists for a signed-in visitor who opened /login.
+        onCancel={signedIn ? leaveLogin : undefined}
+      />
+    );
+  }
+
   return (
     <ArtistNavigationProvider onNavigate={handleNavigateArtist}>
     <TrackContextMenuProvider libraryController={libraryController}>
@@ -1242,6 +1273,9 @@ export default function App() {
           onNavigateAlbum={handleNavigateAlbum}
           onNavigatePlaylist={handleNavigatePlaylist}
           onOpenSettings={handleOpenSettings}
+          onOpenHistory={handleOpenHistory}
+          onOpenRecommendations={handleOpenRecommendations}
+          onSignIn={handleSignIn}
           showSearchBar={activeTab?.view !== "settings" && !playerUIState.isLyricsOpen}
           onOpenSearch={() => setIsSearchOpen(true)}
           canGoBack={canNavigateBack}
@@ -1321,13 +1355,14 @@ export default function App() {
                 onOpenPlaylist={handleNavigatePlaylist}
                 />
             )}
+            {activeTab?.view === "history" && <HistoryPage />}
+            {activeTab?.view === "recommendations" && <RecommendationsPage />}
             {activeTab?.view === "settings" && (
               <SettingsPage
                 libraryController={libraryController}
                 libraryState={libraryState}
                 onRestartOnboarding={restartOnboarding}
                 onSignIn={handleSignIn}
-                onDeleteAllAppData={handleDeleteAllAppData}
               />
             )}
           </div>

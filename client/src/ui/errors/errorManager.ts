@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from "react";
 
-export const GITHUB_REPOSITORY_URL = "https://github.com/2latemc/JustAnotherMusicClient";
+/**
+ * Where "report an issue" / "source" links point.
+ *
+ * Defaults to the reference project this app was rebuilt from; operators can
+ * repoint it at their own fork with `VITE_REPOSITORY_URL` in `client/.env`.
+ */
+export const GITHUB_REPOSITORY_URL =
+  import.meta.env.VITE_REPOSITORY_URL ?? "https://github.com/2latemc/JustAnotherMusicClient";
 export const GITHUB_NEW_ISSUE_URL = `${GITHUB_REPOSITORY_URL}/issues/new/choose`;
 
 const ERROR_AUTO_DISMISS_MS = 8000;

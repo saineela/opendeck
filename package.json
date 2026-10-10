@@ -1,5 +1,5 @@
 {
-  "name": "just-another-music-client-web",
+  "name": "opendeck",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -13,6 +13,7 @@
     "start": "npm run start -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "test": "npm run test -w server && npm run test -w client",
+    "build:test-app": "node test-app/build.mjs",
     "test:e2e": "playwright test",
     "test:all": "npm run test && npm run test:e2e"
   },

@@ -1,9 +1,9 @@
 /**
  * IndexedDB blob store for downloaded tracks — the web equivalent of files
  * saved to disk by the desktop app's downloader. Persisting the bytes lets
- * downloaded tracks play offline through the player's native-audio path, while
- * a copy is also handed to the browser's download manager for the user's
- * Downloads folder.
+ * saved tracks play offline through the player's native-audio path. Nothing is
+ * handed to the browser's download manager — offline audio stays inside
+ * app-managed storage, never in the user's Downloads folder.
  */
 
 const DB_NAME = "jamc-downloads";

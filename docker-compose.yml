@@ -1,0 +1,45 @@
+# OpenDeck — self-hosted, multi-user music client
+#
+#   cp .env.example .env      # then set APP_SECRET (and APP_URL for a domain)
+#   docker compose up -d --build
+#
+# Data (SQLite app.db) lives in the named volume below, so image rebuilds
+# never touch user accounts.
+
+services:
+  opendeck:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: opendeck:latest
+    container_name: opendeck
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-4000}:4000"
+    environment:
+      NODE_ENV: production
+      # Public origin of this deployment. Used for OAuth redirects and to set
+      # the Secure flag on session cookies — put your real https:// domain here.
+      APP_URL: ${APP_URL:-http://localhost:4000}
+      # Signs session/OAuth state cookies and encrypts stored YouTube tokens.
+      # Required: compose refuses to start without it.
+      APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env — generate with: openssl rand -hex 32}
+      # Accounts. Registration is on by default so the first user can sign up;
+      # set ALLOW_REGISTRATION=false afterwards to close the doors.
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      INVITE_CODE: ${INVITE_CODE:-}
+      # Optional Google Sign-In (leave empty to run password-only auth).
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Shown as the issuer in authenticator apps during TOTP enrolment.
+      TOTP_ISSUER: ${TOTP_ISSUER:-OpenDeck}
+      # Set to true when running behind a reverse proxy so rate limiting sees
+      # real client IPs.
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - opendeck-data:/data
+    # HEALTHCHECK is inherited from the image (GET /healthz).
+
+volumes:
+  opendeck-data:

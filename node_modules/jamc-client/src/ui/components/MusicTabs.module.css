@@ -84,7 +84,7 @@
   right: 0;
   height: 3px;
   background: var(--color-accent);
-  box-shadow: 0 -2px 8px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
 .tabContent {
