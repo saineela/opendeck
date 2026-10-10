@@ -225,6 +225,32 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX push_subscriptions_user_idx ON push_subscriptions(user_id);
   `,
+  // v7 — binary image cache: album art, thumbnails and channel avatars.
+  //
+  // Stored as BLOBs (not base64 text) so a 40 KB thumbnail costs 40 KB of
+  // disk rather than 54 KB, and every browser on the instance reuses one copy
+  // instead of re-downloading the same picture from YouTube per device.
+  //
+  // The primary key is a SHA-256 of the source URL rather than the URL
+  // itself: it is a fixed 64 hex chars, so the index stays compact even when
+  // the upstream URL carries a long query string. `url` keeps the original
+  // so eviction can rank candidates by how often their track was played.
+  //
+  // Deliberately global rather than per-user: artwork is public content and
+  // the same thumbnail is shared by every account that browses it.
+  `
+  CREATE TABLE image_cache (
+    hash TEXT PRIMARY KEY,
+    url TEXT NOT NULL UNIQUE,
+    content_type TEXT NOT NULL,
+    data BLOB NOT NULL,
+    bytes INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used INTEGER NOT NULL,
+    hit_count INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX image_cache_last_used_idx ON image_cache(last_used);
+  `,
 ];
 
 function migrate(db: Db): void {

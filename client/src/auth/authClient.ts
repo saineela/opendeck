@@ -41,6 +41,8 @@ export interface AuthSession {
   needsSetup: boolean;
   /** Display name + availability of the configured OIDC provider. */
   oauthProvider: { name: string; configured: boolean };
+  /** Admin's default theme for the whole instance; null when unset. */
+  instanceTheme: string | null;
 }
 
 export type AuthStatus = "loading" | "signed-out" | "signed-in";
@@ -58,6 +60,7 @@ const SIGNED_OUT: AuthSession = {
   role: null,
   needsSetup: false,
   oauthProvider: { name: "Google", configured: false },
+  instanceTheme: null,
 };
 
 let session: AuthSession = SIGNED_OUT;
@@ -130,6 +133,7 @@ export async function refreshAuthSession(): Promise<AuthSession> {
           name: payload.oauthProvider?.name || "Google",
           configured: Boolean(payload.oauthProvider?.configured),
         },
+        instanceTheme: typeof payload.instanceTheme === "string" ? payload.instanceTheme : null,
       };
       status = session.authenticated ? "signed-in" : "signed-out";
     setSettingsRemoteAvailability(session.authenticated);

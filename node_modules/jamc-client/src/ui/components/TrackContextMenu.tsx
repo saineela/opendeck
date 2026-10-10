@@ -11,6 +11,8 @@ import {
 } from "react";
 import {
   IconCheck,
+  IconEye,
+  IconEyeOff,
   IconGift,
   IconHeart,
   IconHeartFilled,
@@ -27,6 +29,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import type { Playlist, Track } from "../../datasource/types";
+import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
 import {
@@ -50,6 +53,13 @@ import {
   sendRecommendation,
   type DirectoryEntry,
 } from "../../internal/recommendationsClient";
+import {
+  addSecretTrackShared,
+  ensureSecretTracksLoaded,
+  isTrackSecret,
+  removeSecretTrackShared,
+  subscribeSecretTracks,
+} from "../../internal/presenceClient";
 
 interface MenuPosition {
   x: number;
@@ -107,6 +117,9 @@ export function TrackContextMenuProvider({
   const [addingPlaylistId, setAddingPlaylistId] = useState<string | null>(null);
   const [isRemovingTrack, setIsRemovingTrack] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Secret Show membership, kept live so the menu label flips immediately.
+  const [secretVersion, setSecretVersion] = useState(0);
+  useEffect(() => subscribeSecretTracks(() => setSecretVersion((value) => value + 1)), []);
   const [toast, setToast] = useState<string | null>(null);
   const [isRecipientPickerOpen, setIsRecipientPickerOpen] = useState(false);
   const [recipientDirectory, setRecipientDirectory] = useState<DirectoryEntry[] | null>(null);
@@ -240,6 +253,8 @@ export function TrackContextMenuProvider({
   ) => {
     event.preventDefault();
     event.stopPropagation();
+    // Warm the Secret Show cache so the menu can label this song correctly.
+    void ensureSecretTracksLoaded();
     setTrack(selectedTrack);
     setMenuContext(context ?? null);
     setIsPickerOpen(false);
@@ -257,6 +272,28 @@ export function TrackContextMenuProvider({
     setToast(message);
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), duration);
+  };
+
+  /** Secret Show: hide this song from Discord without stopping it. */
+  const toggleSecretShow = async (selectedTrack: Track) => {
+    try {
+      if (isTrackSecret(selectedTrack.id)) {
+        await removeSecretTrackShared(selectedTrack.id);
+        showToast(`"${selectedTrack.title}" will show on Discord again`);
+      } else {
+        await addSecretTrackShared({
+          videoId: selectedTrack.id,
+          title: selectedTrack.title,
+          artist: selectedTrack.artist,
+          ...(selectedTrack.artworkUrl
+            ? { artworkUrl: toCachedArtworkUrl(selectedTrack.artworkUrl) }
+            : {}),
+        });
+        showToast(`"${selectedTrack.title}" is now a Secret Show`);
+      }
+    } catch {
+      showToast("Could not update Secret Show.");
+    }
   };
 
   const showPersistentToast = (message: string) => {
@@ -491,6 +528,7 @@ export function TrackContextMenuProvider({
           className={styles.contextMenu}
           style={{ left: menuPosition.x, top: menuPosition.y }}
           role="menu"
+          key={`menu-${secretVersion}`}
           onMouseDown={(event) => event.stopPropagation()}
         >
           <button type="button" role="menuitem" onClick={playNext}>
@@ -543,6 +581,25 @@ export function TrackContextMenuProvider({
               )}
               <span className={styles.menuLabel}>
                 {selectedTrackIsLiked ? "Remove like" : "Like song"}
+              </span>
+            </button>
+          )}
+          {track && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuPosition(null);
+                void toggleSecretShow(track);
+              }}
+            >
+              {isTrackSecret(track.id) ? (
+                <IconEye size={18} aria-hidden="true" />
+              ) : (
+                <IconEyeOff size={18} aria-hidden="true" />
+              )}
+              <span className={styles.menuLabel}>
+                {isTrackSecret(track.id) ? "Show on Discord again" : "Secret Show — hide from Discord"}
               </span>
             </button>
           )}
@@ -645,7 +702,7 @@ export function TrackContextMenuProvider({
                   >
                     <span className={styles.playlistArtwork}>
                       {playlist.artworkUrl ? (
-                        <img src={playlist.artworkUrl} alt="" />
+                        <img src={toCachedArtworkUrl(playlist.artworkUrl)} alt="" />
                       ) : (
                         <IconPlaylist size={24} aria-hidden="true" />
                       )}
@@ -739,7 +796,7 @@ export function TrackContextMenuProvider({
                     >
                       <span className={styles.playlistArtwork}>
                         {user.picture ? (
-                          <img src={user.picture} alt="" />
+                          <img src={toCachedArtworkUrl(user.picture)} alt="" />
                         ) : (
                           <IconUser size={24} aria-hidden="true" />
                         )}

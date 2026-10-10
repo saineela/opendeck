@@ -1,8 +1,8 @@
 OpenDeck
 Copyright 2026 OpenDeck contributors
 
-This product is a from-scratch web reimplementation inspired by, and
-architecturally derived from, the desktop application:
+This product is a web-based adaptation of, and derivative work of, the
+desktop application:
 
   Just Another Music Client
   https://github.com/2latemc/JustAnotherMusicClient
@@ -26,9 +26,20 @@ Modifications made in this project include, without limitation:
   * server-side per-user library storage (playlists and liked songs)
   * song recommendations between registered accounts, with Web Push delivery
     and a documented bearer-key-compatible HTTP API
-  * a light-first interface theme
-  * removal of the save-to-disk download feature
+  * twelve built-in interface themes plus custom CSS theme support, with an
+    admin-set instance default that also styles the sign-in page
+  * Discord Rich Presence driven from the server, with per-account settings,
+    a custom status message, and per-account "Secret Show" exceptions that
+    keep chosen songs off the profile
+  * an offline feature that stores audio in the listener's own browser
+    storage (IndexedDB) rather than on a shared server disk; the server
+    relays audio for playback without writing audio files to its own disk
+  * a shared server-side artwork and API-response cache
+  * Docker packaging and self-hosted API documentation
   * removal of the Last.fm integration
-  * Docker packaging and API documentation
 
-See README.md ("Credits and license") for the full attribution statement.
+Upstream does not ship a NOTICE file of its own; this file is an attribution
+notice for the derivative. See README.md ("Credits and license") for the
+full attribution statement. This product's license and attribution concern
+the software only — see the Legal section of README.md regarding content
+retrieved from YouTube.

@@ -34,6 +34,13 @@ import { useMediaSession } from "../player/useMediaSession";
 import { playerUIStore, usePlayerUIState } from "./stores/playerUIStore";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
 import { ErrorToastViewport } from "./components/ErrorToastViewport";
+import { DebugOverlay } from "./components/DebugOverlay";
+import {
+  hydrateDebugOverlaySetting,
+  setDebugOverlayEnabled,
+  useDebugOverlayEnabled,
+} from "./settings/debugOverlay";
+import { hydratePresenceSettings } from "../internal/presenceClient";
 import {
   getAppSetting,
   removeAppSetting,
@@ -195,6 +202,8 @@ export default function App() {
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
   );
+  // Admin-only cache inspector; the durable setting follows the account.
+  const debugOverlayEnabled = useDebugOverlayEnabled();
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(null);
   const [showQueueMounted, setShowQueueMounted] = useState(false);
   const [onboardingFirstTabId, setOnboardingFirstTabId] = useState(activeTabId);
@@ -209,6 +218,12 @@ export default function App() {
       if (cancelled) return;
       tabManager.applyPlaybackSettings(settings);
     });
+    // Pull the admin Debug switch from durable settings so it survives a
+    // reload and follows the account across devices.
+    void hydrateDebugOverlaySetting();
+    // Adopt the account's Discord Rich Presence switch before the player
+    // reports anything.
+    void hydratePresenceSettings();
 
     return () => {
       cancelled = true;
@@ -1403,6 +1418,9 @@ export default function App() {
       )}
       {showOnboardingComplete && <OnboardingCompleteToast />}
       <ErrorToastViewport />
+      {debugOverlayEnabled && (
+        <DebugOverlay onClose={() => setDebugOverlayEnabled(false)} />
+      )}
     </div>
     </PlaylistContextMenuProvider>
     </TrackContextMenuProvider>

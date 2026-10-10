@@ -23,7 +23,25 @@ export interface AdminOverview {
   sessions: number;
   apiKeys: number;
   cacheEntries: number;
+  imageCacheBytes: number;
   settings: number;
+}
+
+export interface CachedArtworkEntry {
+  hash: string;
+  url: string;
+  contentType: string;
+  bytes: number;
+  createdAt: number;
+  lastUsed: number;
+  hitCount: number;
+  /** Plays of the track this picture belongs to, across every account. */
+  playCount: number;
+}
+
+export interface ImageCacheReport {
+  stats: { maxBytes: number; usedBytes: number; entryCount: number; usageRatio: number };
+  images: CachedArtworkEntry[];
 }
 
 export interface OAuthProviderConfig {
@@ -145,10 +163,28 @@ export function setRegistrationConfig(
   });
 }
 
+/** Instance theme: the admin's default look for every page, incl. sign-in. */
+export function setInstanceTheme(theme: string): Promise<{ theme: string }> {
+  return requestJson<{ theme: string }>("/instance-theme", {
+    method: "PUT",
+    body: JSON.stringify({ theme }),
+  });
+}
+
 /** Instance-wide data reset — the server requires a fresh TOTP code. */
 export function resetAppData(totpCode: string): Promise<ResetResult> {
   return requestJson<ResetResult>("/reset", {
     method: "POST",
     body: JSON.stringify({ totpCode }),
   });
+}
+
+/** Artwork cache: what is using the disk and what an eviction would spare. */
+export function getImageCache(): Promise<ImageCacheReport> {
+  return requestJson<ImageCacheReport>("/image-cache");
+}
+
+/** "Format" — empty the artwork cache and VACUUM the file back down. */
+export function formatImageCache(): Promise<{ ok: true; stats: ImageCacheReport["stats"] }> {
+  return requestJson("/image-cache/format", { method: "POST", body: "{}" });
 }

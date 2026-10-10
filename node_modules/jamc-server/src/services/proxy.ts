@@ -104,6 +104,25 @@ export function isHostAllowed(rawUrl: URL): boolean {
   });
 }
 
+/**
+ * Hosts the image cache (`GET /api/artwork`) will fetch on behalf of a
+ * caller. Narrower than the general proxy allowlist on purpose: that list
+ * includes JSON and font origins, and an unauthenticated GET that could pull
+ * arbitrary bytes from any of them would be an open relay. These three
+ * patterns cover every artwork shape the client produces (video thumbnails
+ * from ytimg, channel art from googleusercontent/ggpht).
+ */
+const DEFAULT_ARTWORK_HOSTS = ["ytimg.com", "googleusercontent.com", "ggpht.com"];
+
+export function isArtworkHostAllowed(rawUrl: URL): boolean {
+  if (!isHostAllowed(rawUrl)) return false;
+  const host = normalizeHost(rawUrl.hostname);
+  return DEFAULT_ARTWORK_HOSTS.some((allowed) => {
+    const normalized = normalizeHost(allowed);
+    return host === normalized || host.endsWith(`.${normalized}`);
+  });
+}
+
 function needsBearerAuth(url: URL): boolean {
   if (url.hostname !== "youtube.com" && !url.hostname.endsWith(".youtube.com")) return false;
   return (

@@ -31,7 +31,12 @@ import {
   normalizeEmail,
   userCount,
 } from "../services/accounts.js";
-import { getOAuthSettings, getRegistrationSettings, withOAuthSettings } from "../services/instanceConfig.js";
+import {
+  getInstanceTheme,
+  getOAuthSettings,
+  getRegistrationSettings,
+  withOAuthSettings,
+} from "../services/instanceConfig.js";
 import {
   buildOtpauthUri,
   consumeBackupCode,
@@ -230,6 +235,10 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
       googleSignInEnabled: oauth.configured,
       oauthProvider: { name: oauth.providerName, configured: oauth.configured },
       inviteCodeRequired: Boolean(config.registration.inviteCode),
+      // The admin's default theme. Public on purpose: the sign-in page has
+      // no account behind it, and the instance's look is not a secret. A
+      // signed-in user's own choice still wins inside the app.
+      instanceTheme: getInstanceTheme(db),
     };
   }
 

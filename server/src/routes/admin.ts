@@ -7,12 +7,20 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { checkPasswordPolicy, hashPassword } from "../services/password.js";
 import { normalizeDisplayName, normalizeEmail } from "../services/accounts.js";
 import {
+  getInstanceTheme,
   getOAuthSettings,
   getRegistrationSettings,
+  KNOWN_INSTANCE_THEMES,
+  setInstanceTheme,
   setOAuthSettings,
   setRegistrationEnabled,
 } from "../services/instanceConfig.js";
 import { consumeBackupCode, verifyTotp } from "../services/totp.js";
+import {
+  clearImageCache,
+  getImageCacheStats,
+  listCachedImages,
+} from "../services/imageCache.js";
 import { logger } from "../logger.js";
 
 /**
@@ -91,8 +99,28 @@ export function createAdminRoutes(db: Db, config: ServerConfig): Router {
       sessions: count("SELECT COUNT(*) AS n FROM sessions"),
       apiKeys: count("SELECT COUNT(*) AS n FROM api_keys"),
       cacheEntries: count("SELECT COUNT(*) AS n FROM cache_entries"),
+      imageCacheBytes: getImageCacheStats(db).usedBytes,
       settings: count("SELECT COUNT(*) AS n FROM app_settings"),
     });
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Artwork cache administration — the "format disk" controls. The cache is
+   * global, so the budget and the reset affect every account and both sit
+   * behind the admin gate.
+   * ------------------------------------------------------------------ */
+
+  router.get("/image-cache", adminGate, listLimit, (_req: Request, res: Response) => {
+    res.json({
+      stats: getImageCacheStats(db),
+      images: listCachedImages(db, 25),
+    });
+  });
+
+  router.post("/image-cache/format", adminGate, mutateLimit, (req: Request, res: Response) => {
+    const stats = clearImageCache(db);
+    logger.warn("admin.imageCache.formatted", { adminId: req.sessionUserId });
+    res.json({ ok: true, stats });
   });
 
   router.get("/users", adminGate, listLimit, (_req: Request, res: Response) => {
@@ -342,6 +370,29 @@ export function createAdminRoutes(db: Db, config: ServerConfig): Router {
   });
 
   /* ------------------------------------------------------------------ *
+   * Instance theme — the admin's default look for every page, including
+   * sign-in. Personal choices inside the app still win per account.
+   * ------------------------------------------------------------------ */
+
+  router.get("/instance-theme", adminGate, listLimit, (_req: Request, res: Response) => {
+    res.json({ theme: getInstanceTheme(db) });
+  });
+
+  router.put("/instance-theme", adminGate, mutateLimit, (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.theme !== "string" || !KNOWN_INSTANCE_THEMES.has(body.theme)) {
+      jsonError(res, 400, "\"theme\" must be a known theme id.");
+      return;
+    }
+    setInstanceTheme(db, body.theme);
+    logger.info("admin.instance-theme.updated", {
+      adminId: req.sessionUserId,
+      theme: body.theme,
+    });
+    res.json({ theme: getInstanceTheme(db) });
+  });
+
+  /* ------------------------------------------------------------------ *
    * Instance data reset — TOTP re-authentication required.
    * ------------------------------------------------------------------ */
 
@@ -386,6 +437,10 @@ export function createAdminRoutes(db: Db, config: ServerConfig): Router {
     // and every other session (the acting admin stays signed in).
     const settingsCleared = db.prepare("DELETE FROM app_settings").run().changes;
     const cacheCleared = db.prepare("DELETE FROM cache_entries").run().changes;
+    // Artwork is public content, but a full reset should not leave the
+    // instance's disk footprint behind either.
+    const imageCacheCleared = getImageCacheStats(db).entryCount;
+    clearImageCache(db);
     // Every session dies except the one proving the TOTP code right now —
     // the acting admin stays signed in, everyone else must sign in again.
     const currentSessionId = getSessionId(req);
@@ -396,6 +451,7 @@ export function createAdminRoutes(db: Db, config: ServerConfig): Router {
       adminId,
       settingsCleared,
       cacheCleared,
+      imageCacheCleared,
       sessionsRevoked,
     });
     res.json({ ok: true, settingsCleared, cacheCleared, sessionsRevoked });

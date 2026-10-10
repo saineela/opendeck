@@ -40,13 +40,32 @@ function inlineMarkdown(text: string): string {
   // Bold before links so link labels can be bold.
   prepared = prepared.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   prepared = prepared.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_match, label: string, href: string) => {
-    const safeHref = /^(https?:\/\/|\/|#|mailto:)/.test(href) ? href : "#";
-    const external = /^https?:\/\//.test(safeHref);
-    return `<a href="${safeHref}"${external ? ' rel="noreferrer"' : ""}>${label}</a>`;
+    if (/^https?:\/\//.test(href)) {
+      return `<a href="${href}" rel="noreferrer">${label}</a>`;
+    }
+    if (/^(\/|#|mailto:)/.test(href)) {
+      return `<a href="${href}">${label}</a>`;
+    }
+    // Companion documents are served under /docs/<file> (see createApp).
+    // Anything else relative is rendered as plain text rather than a dead
+    // `href="#"` link — a link that goes nowhere is worse than no link.
+    const file = /^[\w.-]+$/.test(href) ? href : null;
+    return file ? `<a href="/docs/${file}">${label}</a>` : label;
   });
   prepared = prepared.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 
   return prepared.replace(/\u0000(\d+)\u0000/g, (_match, index: string) => codeSpans[Number(index)]!);
+}
+
+/**
+ * A wrapped list-item continuation line: indented, non-blank, and not the
+ * start of a new block. Without this a bullet wrapped across two source lines
+ * is split into a truncated `<li>` followed by a stray `<p>` — visible in
+ * API.md's "Hardened headers" bullet.
+ */
+function isContinuation(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false;
+  return !/^(#{1,6}\s|```|\||>|[-*]\s|\d+\.\s|-{3,}$)/.test(line.trim());
 }
 
 function tableRowCells(line: string): string[] {
@@ -143,23 +162,33 @@ export function markdownToHtml(markdown: string): { body: string; toc: Array<{ i
       continue;
     }
 
-    // Unordered list.
+    // Unordered list. Indented continuations join the current item.
     if (/^[-*]\s+/.test(line)) {
       const items: string[] = [];
       while (index < lines.length && /^[-*]\s+/.test(lines[index]!)) {
-        items.push(`<li>${inlineMarkdown(lines[index]!.replace(/^[-*]\s+/, ""))}</li>`);
+        let text = lines[index]!.replace(/^[-*]\s+/, "");
         index += 1;
+        while (index < lines.length && isContinuation(lines[index]!)) {
+          text += ` ${lines[index]!.trim()}`;
+          index += 1;
+        }
+        items.push(`<li>${inlineMarkdown(text)}</li>`);
       }
       out.push(`<ul>${items.join("")}</ul>`);
       continue;
     }
 
-    // Ordered list.
+    // Ordered list, with the same continuation handling.
     if (/^\d+\.\s+/.test(line)) {
       const items: string[] = [];
       while (index < lines.length && /^\d+\.\s+/.test(lines[index]!)) {
-        items.push(`<li>${inlineMarkdown(lines[index]!.replace(/^\d+\.\s+/, ""))}</li>`);
+        let text = lines[index]!.replace(/^\d+\.\s+/, "");
         index += 1;
+        while (index < lines.length && isContinuation(lines[index]!)) {
+          text += ` ${lines[index]!.trim()}`;
+          index += 1;
+        }
+        items.push(`<li>${inlineMarkdown(text)}</li>`);
       }
       out.push(`<ol>${items.join("")}</ol>`);
       continue;

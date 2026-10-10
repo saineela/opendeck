@@ -101,6 +101,12 @@ let glassThemeSettingsSnapshot = DEFAULT_GLASS_THEME_SETTINGS;
 let matrixThemeSettingsSnapshot = DEFAULT_MATRIX_THEME_SETTINGS;
 let themeUsername = "user";
 let themeUsernameLoadPromise: Promise<void> | null = null;
+/**
+ * The admin's instance theme, adopted when this account has not chosen its
+ * own. Fetched with the session, so the sign-in page (which has no account)
+ * still wears the instance's look.
+ */
+let instanceThemeSnapshot: AppTheme | null = null;
 
 function isAppTheme(value: unknown): value is AppTheme {
   return value === "dark"
@@ -147,9 +153,23 @@ function readAppTheme(): AppTheme {
   const stored = readLocalJsonSetting(STORAGE_KEY, (value): value is AppTheme | "default" =>
     isAppTheme(value) || value === "default"
   );
-  // Light is the default face of the app; "default" is a legacy value that
-  // used to resolve to the old dark palette.
-  return stored === "default" ? "light" : stored ?? "light";
+  // "default" is the legacy sentinel for "no personal choice" — it now
+  // resolves to the instance theme, then to light. A personal pick wins.
+  if (stored === "default") return instanceThemeSnapshot ?? "light";
+  return stored ?? instanceThemeSnapshot ?? "light";
+}
+
+/** Whether this account has explicitly picked a theme of its own. */
+export function hasPersonalTheme(): boolean {
+  const stored = readLocalJsonSetting(STORAGE_KEY, (value): value is AppTheme | "default" =>
+    isAppTheme(value) || value === "default"
+  );
+  return stored !== null && stored !== "default";
+}
+
+/** The admin's instance theme, once the session has reported it. */
+export function getInstanceTheme(): AppTheme | null {
+  return instanceThemeSnapshot;
 }
 
 function normalizeGlassThemeSettings(settings: Partial<GlassThemeSettings>): GlassThemeSettings {
@@ -252,14 +272,23 @@ function hydrateThemeUsername() {
   if (themeUsernameLoadPromise) return;
 
   // Desktop used the OS username; on the web the signed-in account name is
-  // the closest equivalent, falling back to "user".
+  // the closest equivalent, falling back to "user". The same session call
+  // carries the admin's instance theme, so both land together.
   themeUsernameLoadPromise = refreshAuthSession()
     .then((session) => {
       const nextUsername = sanitizeThemeUsername(session.user?.name ?? "user");
-      if (themeUsername === nextUsername) return;
+      const nextInstanceTheme = isAppTheme(session.instanceTheme)
+        ? session.instanceTheme
+        : null;
+      const usernameChanged = themeUsername !== nextUsername;
+      const instanceChanged = instanceThemeSnapshot !== nextInstanceTheme;
 
-      themeUsername = nextUsername;
-      applyAppTheme();
+      if (usernameChanged) themeUsername = nextUsername;
+      if (instanceChanged) instanceThemeSnapshot = nextInstanceTheme;
+      if (usernameChanged || instanceChanged) {
+        applyAppTheme();
+        dispatchAppThemeChange();
+      }
     })
     .catch((error) => {
       logInternalWarn("theme username load failed", {
@@ -433,6 +462,16 @@ export async function hydrateAppTheme() {
 export function setAppTheme(theme: AppTheme) {
   writeLocalJsonSetting(STORAGE_KEY, theme);
   applyAppTheme(theme);
+  dispatchAppThemeChange();
+}
+
+/**
+ * Drop the personal pick so the instance theme applies to this account —
+ * the "use what the admin set" escape hatch next to the theme grid.
+ */
+export function clearPersonalTheme() {
+  writeLocalJsonSetting(STORAGE_KEY, "default");
+  applyAppTheme();
   dispatchAppThemeChange();
 }
 

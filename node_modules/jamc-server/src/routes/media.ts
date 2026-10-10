@@ -5,6 +5,8 @@ import type { Db } from "../db.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { fetchAllowlisted } from "../services/safeFetch.js";
 import { recordPlay } from "../services/playHistory.js";
+import { updatePresence } from "../services/discordRpc.js";
+import { isSecretTrack, readPresenceSettings } from "./presence.js";
 import { logger } from "../logger.js";
 
 /**
@@ -64,17 +66,43 @@ function recordStreamPlay(req: Request, db: Db, url: URL): void {
   const videoId = stringParam(req, "videoId") ?? url.searchParams.get("id") ?? null;
   if (!videoId) return;
   const rawDuration = Number(req.query.durationSec);
+  const title = stringParam(req, "title") ?? videoId;
+  const artist = stringParam(req, "artist");
+  const album = stringParam(req, "album");
+  const artworkUrl = stringParam(req, "artwork");
   recordPlay(db, {
     userId: req.sessionUserId,
     videoId,
-    title: stringParam(req, "title") ?? videoId,
-    artist: stringParam(req, "artist"),
-    album: stringParam(req, "album"),
-    artworkUrl: stringParam(req, "artwork"),
+    title,
+    artist,
+    album,
+    artworkUrl,
     durationSeconds: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null,
     source: req.authVia === "api-key" ? "api" : "app",
     apiKeyId: req.apiKeyId ?? null,
   });
+
+  // A track pulled through the HTTP API is a real listen, so it belongs on
+  // Discord like any other — same opt-in, same per-account settings, and the
+  // same Secret Show exceptions. Fire and forget: presence must never delay
+  // or fail an audio response.
+  if (
+    readPresenceSettings(db, req.sessionUserId).enabled &&
+    !isSecretTrack(db, req.sessionUserId, videoId)
+  ) {
+    void updatePresence({
+      title,
+      artist: artist ?? "",
+      album,
+      artworkUrl,
+      songUrl: undefined,
+      currentTime: 0,
+      duration: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : undefined,
+      isPlaying: true,
+    }).catch(() => {
+      // Cosmetic; the stream already succeeded.
+    });
+  }
 }
 
 export function createMediaRoutes(db: Db): Router {

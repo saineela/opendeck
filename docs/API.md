@@ -30,6 +30,7 @@ cookie `Secure` flag.
 | Request bodies (mutations) | `application/json` |
 | Responses (except media + callback HTML/JS) | `application/json; charset=utf-8` |
 | `GET /api/media/stream` | passthrough audio (`audio/mp4`, `audio/webm`, …) |
+| `GET /api/artwork` | cached image bytes (`image/jpeg`, `image/webp`, …) |
 
 JSON bodies are capped at **10 MB** (`express.json({ limit: "10mb" })`).
 A malformed body returns **400** `{"error":"Invalid JSON body."}`; an
@@ -115,7 +116,7 @@ Fixed 60-second windows, keyed by client IP + bucket. Exceeding returns
 | `recommend-send` | `POST /api/recommendations` | 30 / min |
 | `recommend-read` | recommendation reads, marks, deletes | 180 / min |
 | `push-sub` | `/api/push/*` | 30 / min |
-| `cache` | `/api/cache/*` | 600 / min |
+| `cache` | `/api/cache/*` | 600 / min (6000 / min for `GET /api/artwork`) |
 | `settings` | `/api/settings/*` | 300 / min |
 | `apikeys` | `GET /api/keys` · `DELETE /api/keys/:id` | 60 / min |
 | `apikeys-create` | `POST /api/keys` | 10 / min |
@@ -997,6 +998,57 @@ a GB slider in Settings → default 4 GB.)
 Clears only the **caller's** namespace (signed-in vs anonymous), returns
 stats.
 
+#### `GET /api/artwork?url=…` · **public**
+
+The **artwork cache** — album art, track thumbnails and channel avatars.
+The client points every `<img>` here instead of at YouTube, so one copy of
+a picture is fetched from the origin **once per instance** rather than
+once per browser session, and it survives switching devices. Rate limit
+6000/min.
+
+| | |
+|---|---|
+| Query | `url` — absolute `https` URL, ≤ 8192 chars (400 otherwise) |
+| 200 | Image bytes with `Content-Type` from upstream, `Content-Length`, `ETag: "<sha256 of url>"`, `Cache-Control: public, max-age=2592000, immutable` |
+| 304 | `If-None-Match` matched — an index probe, no body |
+| 403 | Host outside the artwork allowlist, or not `https` |
+| 415 | The URL answered with a non-image `Content-Type` (never cached) |
+| 502 | Origin failed, timed out (15 s), or is inside a 5 s retry cooldown |
+
+**Why the host policy is narrower than `/api/yt/proxy`.** This endpoint is
+unauthenticated (an `<img>` cannot usefully carry a session), so it only
+accepts `*.ytimg.com`, `*.googleusercontent.com` and `*.ggpht.com`. The
+general proxy allowlist also covers JSON and font origins, which would
+turn this into an open relay.
+
+Bytes are stored as SQLite **BLOBs** keyed by `sha256(url)`, not base64:
+a 40 KB thumbnail costs 40 KB of disk and needs no decode pass. Concurrent
+misses on one URL are coalesced into a single origin fetch (opening a
+50-track grid otherwise fires the same picture N times), and a failed
+fetch is not retried for five seconds so a dead host is not hammered once
+per thumbnail.
+
+**Eviction.** When the budget is reached the least valuable picture goes
+first — played least, then requested least, then seen least. Plays are
+matched through `play_history.artwork_url`, normalized so a play recorded
+against `…/hqdefault.jpg` still counts against `…/w540-h540.jpg`. The
+sweep trims to 90% of the budget so the next few thousand inserts do not
+each pay for another pass.
+
+#### Artwork budget — admin only
+
+| Route | Body | Response |
+|---|---|---|
+| `POST /api/cache/artwork/stats` | — | `{maxBytes, usedBytes, entryCount, usageRatio}` — **session required**; the numbers are instance-wide |
+| `POST /api/cache/artwork/setMaxBytes` | `{ "maxBytes": 536870912 }` | Same stats after re-trimming. 401 anonymous, 403 non-admin; clamped to 64 MB – 64 GB |
+| `POST /api/cache/artwork/format` | — | Same stats, always empty. Drops every picture and **VACUUMs**, so the disk space is really returned |
+
+The cache is global (artwork is public content, and the same thumbnail is
+shared by every account), so the budget and the format affect everyone and
+both sit behind the admin gate. The shipped client renders `usageRatio` as
+a meter in Settings → System, and exposes the format both there and under
+Settings → Admin → *Artwork storage*.
+
 ---
 
 ### 2.9 Settings — `/api/settings`
@@ -1057,7 +1109,7 @@ admin, everyone else is `user` until promoted. The session payload reports
 
 | Route | Body | Response |
 |---|---|---|
-| `GET /api/admin/overview` | — | `{users, admins, sessions, apiKeys, cacheEntries, settings}` counts |
+| `GET /api/admin/overview` | — | `{users, admins, sessions, apiKeys, cacheEntries, imageCacheBytes, settings}` counts |
 | `GET /api/admin/users` | — | `{users:[{id, name, email, role, authProvider, totpEnabled, createdAt, lastLoginAt}]}` — oldest first, never credential material |
 | `POST /api/admin/users` | `{ "email", "password", "name"?, "role"? }` | **201** `{user}` — creates a password account (no invite needed); 409 duplicate |
 | `PATCH /api/admin/users/:id` | `{ "role": "admin" \| "user" }` | `{user}` — 400 self-demotion, 409 last-admin, 404 unknown |
@@ -1068,6 +1120,9 @@ admin, everyone else is `user` until promoted. The session payload reports
 | `PUT /api/admin/oauth` | `{providerName?, discoveryUrl?, clientId?, clientSecret?}` | `{provider}` — instance overrides of the OIDC config; empty string deletes an override (env wins again) |
 | `GET /api/admin/registration` | — | `{registration:{enabled, overridden, envDefault, inviteCodeRequired}}` — the public account-creation switch |
 | `PUT /api/admin/registration` | `{ "enabled": true \| false }` | `{registration}` — closes/opens self-service sign-up at runtime (overrides `ALLOW_REGISTRATION`) |
+
+| `GET /api/admin/image-cache` | — | `{stats, images:[{hash, url, contentType, bytes, createdAt, lastUsed, hitCount, playCount}]}` — the 25 largest pictures, largest first |
+| `POST /api/admin/image-cache/format` | — | `{ok, stats}` — empties the artwork cache and VACUUMs it back down |
 | `POST /api/admin/reset` | `{ "totpCode": "…" }` | `{ok, settingsCleared, cacheCleared, sessionsRevoked}` — **needs a fresh TOTP/backup code from the admin** (403 without two-step enabled) |
 
 Closing **Account creation** (`PUT /api/admin/registration`) takes effect
@@ -1077,9 +1132,10 @@ longer mint an account** through the provider flow. Existing accounts —
 password and OIDC — keep signing in, and the first-run setup exemption is
 untouched: an instance with zero accounts can always be provisioned.
 
-`POST /api/admin/reset` wipes every account's durable settings and the
-cache and signs everyone out **except the admin presenting the code**;
-accounts, playlists, likes, and API keys are untouched.
+`POST /api/admin/reset` wipes every account's durable settings, the
+JSON cache and the shared artwork cache, and signs everyone out **except
+the admin presenting the code**; accounts, playlists, likes, and API keys
+are untouched.
 
 ---
 
@@ -1395,6 +1451,10 @@ never fails the recommendation that triggered it.
 | POST | `/api/cache/stats` | — | 600 | Global stats |
 | POST | `/api/cache/setMaxBytes` | **session** | 600 | Resize budget |
 | POST | `/api/cache/clear` | — | 600 | Clears caller namespace |
+| GET | `/api/artwork` | — | 6000 | Cached artwork bytes · host-allowlisted · records no play |
+| POST | `/api/cache/artwork/stats` | **session** | 600 | Shared artwork-cache usage |
+| POST | `/api/cache/artwork/setMaxBytes` | **admin** | 600 | Clamp 64 MB – 64 GB, trims immediately |
+| POST | `/api/cache/artwork/format` | **admin** | 600 | Drop everything + VACUUM |
 | POST | `/api/settings/get` | **session** | 300 | Per-user JSON values |
 | POST | `/api/settings/set` | **session** | 300 | ≤ 128 KB serialized |
 | POST | `/api/settings/remove` | **session** | 300 | |

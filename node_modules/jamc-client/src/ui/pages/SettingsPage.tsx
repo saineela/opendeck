@@ -19,16 +19,38 @@ import {
   IconPalette,
   IconRefresh,
   IconShieldExclamation,
+  IconEyeOff,
   IconTrash,
   IconUser,
 } from "@tabler/icons-react";
 import {
   clearCache,
+  DEFAULT_ARTWORK_CACHE_SIZE_MB,
   DEFAULT_CACHE_SIZE_GB,
+  formatArtworkCache,
+  getArtworkCacheStats,
   getCacheStats,
+  MAX_ARTWORK_CACHE_SIZE_MB,
+  MIN_ARTWORK_CACHE_SIZE_MB,
+  setArtworkCacheMaxBytes,
   setCacheMaxBytes,
+  type ArtworkCacheStats,
   type CacheStats,
 } from "../../internal/cache";
+import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
+import { setDebugOverlayEnabled, useDebugOverlayEnabled } from "../settings/debugOverlay";
+import {
+  DEFAULT_PRESENCE_SETTINGS,
+  addSecretTrackShared,
+  getPresenceStatus,
+  getPresenceSettings,
+  getSecretTracks,
+  removeSecretTrackShared,
+  savePresenceSettings,
+  type PresenceSettings,
+  type PresenceStatus,
+  type SecretTrack,
+} from "../../internal/presenceClient";
 import type { LibraryController, LibraryState } from "../../player/LibraryController";
 import {
   setExtraPlayerControlsAlwaysVisible,
@@ -36,6 +58,8 @@ import {
 } from "../settings/playerControls";
 import {
   APP_THEMES,
+  clearPersonalTheme,
+  hasPersonalTheme,
   importCustomThemeCss,
   setAppTheme,
   setGlassThemeSettings,
@@ -96,16 +120,20 @@ import {
   deleteAdminUser,
   getOAuthConfig,
   getOverview,
+  getImageCache,
+  formatImageCache,
   getRegistrationConfig,
   listUsers,
   resetAppData,
   resetUserTotp,
   revokeUserSessions,
   saveOAuthConfig,
+  setInstanceTheme,
   setRegistrationConfig,
   setUserRole,
   type AdminOverview,
   type AdminUser,
+  type ImageCacheReport,
   type OAuthProviderConfig,
   type RegistrationConfig,
 } from "../../auth/adminClient";
@@ -117,6 +145,27 @@ import {
 import styles from "./SettingsPage.module.css";
 
 type SettingsTab = "about" | "system" | "shortcuts" | "window" | "plugins" | "api" | "admin";
+
+/**
+ * Pull a video id out of a pasted YouTube link, share URL, or bare id.
+ * Secret Show matches on the id, so the input accepts every shape users paste.
+ */
+function extractVideoId(input: string): string | null {
+  const bare = input.match(/^[A-Za-z0-9_-]{11}$/);
+  if (bare) return input;
+  try {
+    const url = new URL(input);
+    const fromParam = url.searchParams.get("v");
+    if (fromParam && /^[A-Za-z0-9_-]{11}$/.test(fromParam)) return fromParam;
+    const segments = url.pathname.split("/").filter(Boolean);
+    const marker = segments.findIndex((segment) => segment === "shorts" || segment === "embed");
+    const candidate = marker >= 0 ? segments[marker + 1] : segments.at(-1);
+    if (candidate && /^[A-Za-z0-9_-]{11}$/.test(candidate)) return candidate;
+  } catch {
+    // Not a URL — fall through to the null below.
+  }
+  return null;
+}
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "about", label: "About" },
@@ -255,6 +304,9 @@ export function SettingsPage({
   const [cacheSizeGb, setCacheSizeGb] = useState(DEFAULT_CACHE_SIZE_GB.toString());
   const [cacheBusy, setCacheBusy] = useState(false);
   const [cacheError, setCacheError] = useState<string | null>(null);
+  const [artworkStats, setArtworkStats] = useState<ArtworkCacheStats | null>(null);
+  const [artworkSizeMb, setArtworkSizeMb] = useState(String(DEFAULT_ARTWORK_CACHE_SIZE_MB));
+  const [artworkNotice, setArtworkNotice] = useState<string | null>(null);
   const [localPlaylistName, setLocalPlaylistName] = useState("");
   const [localPlaylistPathInputs, setLocalPlaylistPathInputs] = useState<Record<string, string>>({});
   const [localPlaylistError, setLocalPlaylistError] = useState<string | null>(null);
@@ -269,6 +321,7 @@ export function SettingsPage({
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminOAuth, setAdminOAuth] = useState<OAuthProviderConfig | null>(null);
   const [adminRegistration, setAdminRegistration] = useState<RegistrationConfig | null>(null);
+  const [imageCacheReport, setImageCacheReport] = useState<ImageCacheReport | null>(null);
   const [adminBusy, setAdminBusy] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
@@ -298,6 +351,13 @@ export function SettingsPage({
   const matrixThemeSettings = useMatrixThemeSettings();
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
   const auth = useAuth();
+  // The admin's default theme, from the session payload. Personal choice wins.
+  const instanceTheme = (
+    auth.session.instanceTheme !== null &&
+    APP_THEMES.some((theme) => theme.id === auth.session.instanceTheme)
+      ? auth.session.instanceTheme
+      : null
+  ) as AppTheme | null;
   const authenticatedStreaming = useAuthenticatedStreaming();
   const youtubeScrobbling = useYouTubeScrobbling();
   const streamingQuality = useStreamingQuality();
@@ -323,6 +383,18 @@ export function SettingsPage({
   const [ytVerifyBusy, setYtVerifyBusy] = useState(false);
   const accountPlaybackEnabled = authenticatedStreaming && youtubeScrobbling;
   const isAdmin = auth.session.role === "admin";
+  const debugOverlayEnabled = useDebugOverlayEnabled();
+  const [presenceSettings, setPresenceSettings] = useState<PresenceSettings>({
+    ...DEFAULT_PRESENCE_SETTINGS,
+  });
+  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus | null>(null);
+  const [presenceBusy, setPresenceBusy] = useState(false);
+  const [presenceError, setPresenceError] = useState<string | null>(null);
+  // Secret Show: songs that play freely but never reach Discord.
+  const [secretTracks, setSecretTracks] = useState<SecretTrack[]>([]);
+  const [secretBusy, setSecretBusy] = useState(false);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  const [secretInput, setSecretInput] = useState("");
   const visibleTabs = SETTINGS_TABS.filter((tab) => tab.id !== "admin" || isAdmin);
   const activeTabIndex = Math.max(0, visibleTabs.findIndex((tab) => tab.id === activeTab));
   const authBusy = libraryState.status === "restoring"
@@ -389,6 +461,30 @@ export function SettingsPage({
     };
   }, []);
 
+  // Artwork usage is a global, signed-in-only view: the server answers 401
+  // for anonymous callers, so don't fire the request until there is a session.
+  useEffect(() => {
+    if (!auth.session.authenticated) {
+      setArtworkStats(null);
+      return undefined;
+    }
+    let active = true;
+    void getArtworkCacheStats()
+      .then((stats) => {
+        if (!active) return;
+        setArtworkStats(stats);
+        if (stats.maxBytes > 0) {
+          setArtworkSizeMb(String(Math.round(stats.maxBytes / 1024 ** 2)));
+        }
+      })
+      .catch(() => {
+        if (active) setArtworkStats(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [auth.session.authenticated]);
+
   useEffect(() => {
     if (!auth.session.authenticated) {
       setApiKeys([]);
@@ -422,17 +518,19 @@ export function SettingsPage({
     setAdminError(null);
     const load = async () => {
       try {
-        const [overview, users, oauth, registration] = await Promise.all([
+        const [overview, users, oauth, registration, imageCache] = await Promise.all([
           getOverview(),
           listUsers(),
           getOAuthConfig(),
           getRegistrationConfig(),
+          getImageCache(),
         ]);
         if (!active) return;
         setAdminOverview(overview);
         setAdminUsers(users);
         setAdminOAuth(oauth.provider);
         setAdminRegistration(registration.registration);
+        setImageCacheReport(imageCache);
         setOauthForm({
           providerName: oauth.provider.providerName,
           discoveryUrl: oauth.provider.discoveryUrl,
@@ -450,6 +548,72 @@ export function SettingsPage({
       active = false;
     };
   }, [isAdmin, activeTab]);
+
+  useEffect(() => {
+    if (!auth.session.authenticated) return undefined;
+    let active = true;
+    void Promise.all([getPresenceSettings(), getPresenceStatus(), getSecretTracks()]).then(
+      ([settings, status, secret]) => {
+        if (!active) return;
+        setPresenceSettings(settings);
+        setPresenceStatus(status);
+        setSecretTracks(secret.tracks);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [auth.session.authenticated]);
+
+  const savePresence = async (next: PresenceSettings) => {
+    setPresenceBusy(true);
+    setPresenceError(null);
+    try {
+      const saved = await savePresenceSettings(next);
+      setPresenceSettings(saved);
+      // The switch can change whether the server reaches Discord at all.
+      setPresenceStatus(await getPresenceStatus());
+    } catch {
+      setPresenceError("Unable to save Discord settings.");
+    } finally {
+      setPresenceBusy(false);
+    }
+  };
+
+  /** Add by video id or YouTube link — the id is what the server matches. */
+  const handleAddSecretTrack = async () => {
+    const trimmed = secretInput.trim();
+    if (!trimmed) return;
+    const videoId = extractVideoId(trimmed);
+    if (!videoId) {
+      setSecretError("Paste a YouTube link or video id.");
+      return;
+    }
+    setSecretBusy(true);
+    setSecretError(null);
+    try {
+      const tracks = await addSecretTrackShared({ videoId, title: videoId, artist: "" });
+      setSecretTracks(tracks);
+      setSecretInput("");
+    } catch {
+      setSecretError("Could not add to Secret Show.");
+    } finally {
+      setSecretBusy(false);
+    }
+  };
+
+  const handleRemoveSecretTrack = async (videoId: string) => {
+    setSecretBusy(true);
+    setSecretError(null);
+    try {
+      const tracks = await removeSecretTrackShared(videoId);
+      setSecretTracks(tracks);
+    } catch {
+      setSecretError("Could not remove from Secret Show.");
+    } finally {
+      setSecretBusy(false);
+    }
+  };
 
   const saveCacheSize = async () => {
     const sizeGb = Number(cacheSizeGb);
@@ -476,6 +640,54 @@ export function SettingsPage({
       setCacheStats(await clearCache());
     } catch {
       setCacheError("Unable to clear cached content.");
+    } finally {
+      setCacheBusy(false);
+    }
+  };
+
+  /**
+   * Artwork budget. Admin-only on the server because the cache is shared by
+   * every account, so a non-admin save surfaces the 403 as an error rather
+   * than silently doing nothing.
+   */
+  const saveArtworkCacheSize = async () => {
+    const sizeMb = Number(artworkSizeMb);
+    if (
+      !Number.isFinite(sizeMb)
+      || sizeMb < MIN_ARTWORK_CACHE_SIZE_MB
+      || sizeMb > MAX_ARTWORK_CACHE_SIZE_MB
+    ) {
+      setCacheError(
+        `Artwork cache size must be between ${MIN_ARTWORK_CACHE_SIZE_MB} MB and ${MAX_ARTWORK_CACHE_SIZE_MB / 1024} GB.`,
+      );
+      return;
+    }
+    setCacheBusy(true);
+    setCacheError(null);
+    setArtworkNotice(null);
+    try {
+      setArtworkStats(await setArtworkCacheMaxBytes(Math.round(sizeMb * 1024 ** 2)));
+      setArtworkNotice("Artwork budget saved. The cache trims itself immediately if it is over.");
+    } catch {
+      setCacheError("Unable to save the artwork cache size.");
+    } finally {
+      setCacheBusy(false);
+    }
+  };
+
+  /**
+   * "Format" — the manual reset. The server also VACUUMs, so the disk space
+   * really comes back rather than sitting on SQLite's free list.
+   */
+  const handleFormatArtworkCache = async () => {
+    setCacheBusy(true);
+    setCacheError(null);
+    setArtworkNotice(null);
+    try {
+      setArtworkStats(await formatArtworkCache());
+      setArtworkNotice("Artwork cache formatted. Every picture will be re-fetched as you browse.");
+    } catch {
+      setCacheError("Unable to format the artwork cache.");
     } finally {
       setCacheBusy(false);
     }
@@ -634,6 +846,16 @@ export function SettingsPage({
       ? "Account creation is open — the sign-up option is live on the login page."
       : "Account creation closed — only existing accounts and admin-created ones can sign in.");
 
+  const handleInstanceThemeSelect = (theme: AppTheme) =>
+    runAdmin(async () => {
+      await setInstanceTheme(theme);
+      // Refresh the session so the new instance theme reaches every surface,
+      // including this admin's own view where no personal theme is set.
+      await auth.refresh();
+    }, `Instance theme saved — sign-in and unthemed accounts now wear "${
+      APP_THEMES.find((entry) => entry.id === theme)?.label ?? theme
+    }".`);
+
   const handleResetAppData = () => {
     if (!resetConfirming) {
       setResetConfirming(true);
@@ -788,6 +1010,36 @@ export function SettingsPage({
     return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
   };
 
+  /** Label for a cached picture: host + last path segment, query string dropped. */
+  const describeArtwork = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      const segment = parsed.pathname.split("/").filter(Boolean).pop() ?? parsed.hostname;
+      return `${parsed.hostname}/${segment}`;
+    } catch {
+      return url;
+    }
+  };
+
+  /** Admin-panel Format — same server operation, refreshed report after. */
+  const handleAdminFormatArtwork = async () => {
+    setAdminBusy(true);
+    setAdminError(null);
+    setAdminNotice(null);
+    try {
+      const result = await formatImageCache();
+      setImageCacheReport({ stats: result.stats, images: [] });
+      setAdminOverview((current) =>
+        current ? { ...current, imageCacheBytes: result.stats.usedBytes } : current,
+      );
+      setAdminNotice("Artwork cache formatted — every cached picture was dropped.");
+    } catch (error) {
+      setAdminError(error instanceof Error ? error.message : "Unable to format the artwork cache.");
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
   return (
     <main className={styles.page}>
       <div className={styles.heading}>
@@ -846,7 +1098,11 @@ export function SettingsPage({
 
             <div className={styles.accountRow}>
               {account?.artworkUrl ? (
-                <img className={styles.avatar} src={account.artworkUrl} alt="" />
+                <img
+                  className={styles.avatar}
+                  src={toCachedArtworkUrl(account.artworkUrl)}
+                  alt=""
+                />
               ) : (
                 <div className={styles.avatarPlaceholder}>
                   <IconUser size={30} />
@@ -1003,6 +1259,172 @@ export function SettingsPage({
           </section>
 
           <SecurityCard />
+
+          <section className={styles.card} aria-labelledby="discord-settings-title">
+            <div className={styles.cardHeader}>
+              <div>
+                <h2 id="discord-settings-title">Discord Rich Presence</h2>
+                <p>
+                  Show what you are listening to on your Discord profile, with the
+                  artwork and a link back. Tracks played through the API count too.
+                </p>
+              </div>
+              <span className={styles.status}>
+                {!presenceStatus?.configured
+                  ? "Not set up"
+                  : presenceStatus.connected
+                    ? "Connected"
+                    : presenceStatus.unavailable
+                      ? "No Discord here"
+                      : "Idle"}
+              </span>
+            </div>
+
+            {presenceStatus?.configured && !presenceStatus.connected && (
+              <p className={styles.toggleDescription}>
+                This server has no Discord client to talk to. Rich Presence only
+                reaches a Discord running on the same machine as OpenDeck, so a
+                remote or headless server cannot push to your profile.
+              </p>
+            )}
+
+            <div className={styles.settingsList}>
+              <label className={styles.toggleRow}>
+                <span className={styles.toggleDescription}>
+                  <strong>Show what I am playing</strong>
+                  <span>Off by default. Only you control this; it is per account.</span>
+                </span>
+                <input
+                  className={styles.toggleInput}
+                  type="checkbox"
+                  checked={presenceSettings.enabled}
+                  disabled={presenceBusy}
+                  onChange={(event) =>
+                    void savePresence({ ...presenceSettings, enabled: event.target.checked })}
+                />
+                <span className={styles.toggle} aria-hidden="true" />
+              </label>
+
+              <label className={styles.toggleRow}>
+                <span className={styles.toggleDescription}>
+                  <strong>Show the platform name</strong>
+                  <span>Adds "via OpenDeck" so friends know where it is playing.</span>
+                </span>
+                <input
+                  className={styles.toggleInput}
+                  type="checkbox"
+                  checked={presenceSettings.showPlatform}
+                  disabled={presenceBusy || !presenceSettings.enabled}
+                  onChange={(event) =>
+                    void savePresence({ ...presenceSettings, showPlatform: event.target.checked })}
+                />
+                <span className={styles.toggle} aria-hidden="true" />
+              </label>
+
+              <label className={styles.cacheSizeField}>
+                <span>Your status message</span>
+                <input
+                  type="text"
+                  maxLength={128}
+                  placeholder="Coding OpenDeck"
+                  value={presenceSettings.customMessage}
+                  disabled={presenceBusy || !presenceSettings.enabled}
+                  onChange={(event) =>
+                    setPresenceSettings({ ...presenceSettings, customMessage: event.target.value })}
+                  onBlur={() => void savePresence(presenceSettings)}
+                />
+                <span className={styles.toggleDescription}>
+                  Shown above the track. Leave blank for just the song.
+                </span>
+              </label>
+            </div>
+
+            {presenceError && <p className={styles.error}>{presenceError}</p>}
+          </section>
+
+          <section className={styles.card} aria-labelledby="secret-show-title">
+            <div className={styles.cardHeader}>
+              <div>
+                <h2 id="secret-show-title">Secret Show</h2>
+                <p>
+                  Songs on this list play freely but never reach Discord — your profile
+                  shows nothing playing while one is on. Right-click any song for a
+                  one-click toggle, or paste a link below.
+                </p>
+              </div>
+              <span className={styles.status}>
+                {secretTracks.length > 0 ? `${secretTracks.length} hidden` : "Empty"}
+              </span>
+            </div>
+
+            <div className={styles.settingsList}>
+              <div className={styles.localPlaylistsBlock}>
+                <div className={styles.localPlaylistHeader}>
+                  <span className={styles.toggleDescription}>
+                    <strong>Add a song</strong>
+                    <span>A YouTube link or an 11-character video id.</span>
+                  </span>
+                  <div className={styles.localPlaylistCreate}>
+                    <input
+                      type="text"
+                      value={secretInput}
+                      placeholder="https://music.youtube.com/watch?v=…"
+                      aria-label="Song link or video id to hide from Discord"
+                      disabled={secretBusy}
+                      onChange={(event) => setSecretInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void handleAddSecretTrack();
+                      }}
+                    />
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      disabled={secretBusy || !secretInput.trim()}
+                      onClick={() => void handleAddSecretTrack()}
+                    >
+                      <IconEyeOff size={18} />
+                      Hide it
+                    </button>
+                  </div>
+                </div>
+
+                {secretError && <p className={styles.error}>{secretError}</p>}
+
+                {secretTracks.length > 0 ? (
+                  <div className={styles.localPlaylistList}>
+                    {secretTracks.map((secret) => (
+                      <div className={styles.localPlaylistItem} key={secret.videoId}>
+                        <div className={styles.localPlaylistTitleRow}>
+                          <span className={styles.localPlaylistTitle}>
+                            <IconEyeOff size={18} aria-hidden="true" />
+                            {secret.title}
+                          </span>
+                          <button
+                            className={styles.dangerButton}
+                            type="button"
+                            disabled={secretBusy}
+                            onClick={() => void handleRemoveSecretTrack(secret.videoId)}
+                          >
+                            <IconTrash size={18} />
+                            Show again
+                          </button>
+                        </div>
+                        <span className={styles.toggleDescription}>
+                          <span>
+                            {secret.artist ? `${secret.artist} · ` : ""}{secret.videoId}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className={styles.toggleDescription}>
+                    <span>Nothing hidden yet.</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </section>
 
           <section className={styles.card} aria-labelledby="about-settings-title">
             <div className={styles.compactHeader}>
@@ -1195,6 +1617,87 @@ export function SettingsPage({
                 </div>
               </div>
 
+              <div className={styles.cacheRow}>
+                <div className={styles.cacheUsage}>
+                  <span>Artwork cache</span>
+                  <strong>
+                    {artworkStats
+                      ? `${formatBytes(artworkStats.usedBytes)} of ${formatBytes(artworkStats.maxBytes)}`
+                      : "Sign in to see usage"}
+                  </strong>
+                  <span>
+                    {artworkStats
+                      ? `${artworkStats.entryCount} images${
+                          artworkStats.usageRatio >= 0.8
+                            ? ` — ${Math.round(artworkStats.usageRatio * 100)}% full`
+                            : ""
+                        }`
+                      : "Shared across every account"}
+                  </span>
+                  {artworkStats && (
+                    <span
+                      className={styles.artworkMeter}
+                      role="progressbar"
+                      aria-label="Artwork cache usage"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(artworkStats.usageRatio * 100)}
+                    >
+                      <span
+                        className={`${styles.artworkMeterFill}${
+                          artworkStats.usageRatio >= 0.9 ? ` ${styles.artworkMeterHigh}` : ""
+                        }`}
+                        style={{ width: `${Math.max(2, artworkStats.usageRatio * 100)}%` }}
+                      />
+                    </span>
+                  )}
+                </div>
+
+                {isAdmin ? (
+                  <div className={styles.cacheControls}>
+                    <label className={styles.cacheSizeField}>
+                      <span>Maximum size</span>
+                      <span className={styles.inputWithUnit}>
+                        <input
+                          type="number"
+                          min={MIN_ARTWORK_CACHE_SIZE_MB}
+                          max={MAX_ARTWORK_CACHE_SIZE_MB}
+                          step="64"
+                          value={artworkSizeMb}
+                          disabled={cacheBusy}
+                          onChange={(event) => setArtworkSizeMb(event.target.value)}
+                        />
+                        <span>MB</span>
+                      </span>
+                    </label>
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      disabled={cacheBusy}
+                      onClick={() => void saveArtworkCacheSize()}
+                    >
+                      Save
+                    </button>
+                    <button
+                      className={styles.dangerButton}
+                      type="button"
+                      disabled={cacheBusy}
+                      onClick={() => void handleFormatArtworkCache()}
+                    >
+                      <IconTrash size={18} />
+                      Format artwork
+                    </button>
+                  </div>
+                ) : (
+                  <p className={styles.status}>
+                    Album art and thumbnails are cached once for the whole instance. An
+                    administrator sets the budget and can format it.
+                  </p>
+                )}
+              </div>
+
+              {artworkNotice && <p className={styles.status}>{artworkNotice}</p>}
+
               {cacheError && <p className={styles.error}>{cacheError}</p>}
             </div>
           </section>
@@ -1379,9 +1882,36 @@ export function SettingsPage({
                   </span>
                   <span className={styles.themeDetails}>
                     <strong>{theme.label}</strong>
+                    {instanceTheme === theme.id && (
+                      <small className={styles.instanceThemeBadge}>Instance default</small>
+                    )}
                   </span>
                 </button>
               ))}
+            </div>
+
+            <div className={styles.settingActionRow}>
+              <span className={styles.toggleDescription}>
+                <strong>Instance theme</strong>
+                <span>
+                  {instanceTheme
+                    ? `This server's default is "${
+                        APP_THEMES.find((theme) => theme.id === instanceTheme)?.label ?? instanceTheme
+                      }". It applies to sign-in and to anyone who has not chosen their own.`
+                    : "The admin has not set an instance theme; the built-in default applies."}
+                  {hasPersonalTheme()
+                    ? " You have your own theme, which wins inside the app."
+                    : " You are following it now."}
+                </span>
+              </span>
+              <button
+                className={styles.secondaryButton}
+                type="button"
+                disabled={!hasPersonalTheme()}
+                onClick={clearPersonalTheme}
+              >
+                Use instance theme
+              </button>
             </div>
 
             {appTheme === "glass" && (
@@ -1654,6 +2184,12 @@ export function SettingsPage({
               <span className={styles.status}>{adminOverview?.sessions ?? "—"} sessions</span>
               <span className={styles.status}>{adminOverview?.apiKeys ?? "—"} API keys</span>
               <span className={styles.status}>{adminOverview?.cacheEntries ?? "—"} cache entries</span>
+              <span className={styles.status}>
+                {adminOverview?.imageCacheBytes !== undefined
+                  ? formatBytes(adminOverview.imageCacheBytes)
+                  : "—"}{' '}
+                artwork
+              </span>
             </div>
           </section>
 
@@ -1926,6 +2462,134 @@ export function SettingsPage({
                   )}
                 </div>
               </div>
+            </div>
+          </section>
+
+          <section className={styles.card} aria-labelledby="admin-artwork-title">
+            <div className={styles.compactHeader}>
+              <h2 id="admin-artwork-title">Artwork storage</h2>
+            </div>
+            <p className={styles.toggleDescription}>
+              Album art and thumbnails are cached once for the whole instance. When the budget
+              set under System is reached, the least-played artwork is evicted first; formatting
+              drops everything now and reclaims the disk space.
+            </p>
+            <div className={styles.statPills}>
+              <span className={styles.status}>
+                {imageCacheReport ? formatBytes(imageCacheReport.stats.usedBytes) : "—"} used
+              </span>
+              <span className={styles.status}>
+                {imageCacheReport ? formatBytes(imageCacheReport.stats.maxBytes) : "—"} budget
+              </span>
+              <span className={styles.status}>
+                {imageCacheReport?.stats.entryCount ?? "—"} images
+              </span>
+            </div>
+
+            {imageCacheReport && imageCacheReport.images.length > 0 && (
+              <div className={styles.settingsList}>
+                {imageCacheReport.images.slice(0, 8).map((image) => (
+                  <div className={styles.settingRow} key={image.hash}>
+                    <span className={styles.toggleDescription}>
+                      <strong>{describeArtwork(image.url)}</strong>
+                      <span>
+                        {formatBytes(image.bytes)} · {image.hitCount} serves · {image.playCount}{" "}
+                        plays
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className={styles.adminRowActions}>
+              <button
+                className={styles.dangerButton}
+                type="button"
+                disabled={adminBusy}
+                onClick={() => void handleAdminFormatArtwork()}
+              >
+                <IconTrash size={18} />
+                Format artwork cache
+              </button>
+            </div>
+          </section>
+
+          <section className={styles.card} aria-labelledby="admin-instance-theme-title">
+            <div className={styles.cardHeader}>
+              <div>
+                <h2 id="admin-instance-theme-title">Instance theme</h2>
+                <p>
+                  The default look for this whole server — the sign-in page, and
+                  every account that has not picked its own theme. Personal choices
+                  still win inside the app.
+                </p>
+              </div>
+              <span className={styles.status}>
+                {instanceTheme
+                  ? APP_THEMES.find((theme) => theme.id === instanceTheme)?.label ?? instanceTheme
+                  : "Built-in default"}
+              </span>
+            </div>
+
+            <div className={styles.themeGrid}>
+              {APP_THEMES.filter((theme) => theme.id !== "custom").map((theme) => (
+                <button
+                  key={theme.id}
+                  className={`${styles.themeButton} ${instanceTheme === theme.id ? styles.themeButtonActive : ""}`}
+                  type="button"
+                  aria-pressed={instanceTheme === theme.id}
+                  onClick={() => handleInstanceThemeSelect(theme.id)}
+                >
+                  <span className={styles.themeSwatch} aria-hidden="true">
+                    {THEME_SWATCH_COLORS[theme.id].map((color) => (
+                      <span
+                        key={color}
+                        className={styles.themeSwatchSegment}
+                        style={{ background: color }}
+                      />
+                    ))}
+                  </span>
+                  <span className={styles.themeDetails}>
+                    <strong>{theme.label}</strong>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className={styles.card} aria-labelledby="admin-debug-title">
+            <div className={styles.cardHeader}>
+              <div>
+                <h2 id="admin-debug-title">Debug</h2>
+                <p>
+                  Show a cache inspector over every page: which artwork came from
+                  our own cache, what the server is holding, and what this browser
+                  has stored. Read-only.
+                </p>
+              </div>
+              <span className={styles.status}>
+                {debugOverlayEnabled ? "On" : "Off"}
+              </span>
+            </div>
+
+            <div className={styles.settingsList}>
+              <label className={styles.toggleRow}>
+                <span className={styles.toggleDescription}>
+                  <strong>Show the cache overlay</strong>
+                  <span>
+                    Follows your account, not the instance — other administrators
+                    do not see it. Dismiss it any time from the panel itself.
+                  </span>
+                </span>
+                <input
+                  className={styles.toggleInput}
+                  type="checkbox"
+                  checked={debugOverlayEnabled}
+                  onChange={(event) => setDebugOverlayEnabled(event.target.checked)}
+                />
+                <span className={styles.toggle} aria-hidden="true" />
+              </label>
             </div>
           </section>
 

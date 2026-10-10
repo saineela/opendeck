@@ -1,6 +1,6 @@
 import express, { type Request, type Response, type Router } from "express";
 import type { Db } from "../db.js";
-import { requireAuth } from "../middleware/session.js";
+import { requireAdmin, requireAuth } from "../middleware/session.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import {
   cacheGet,
@@ -9,6 +9,12 @@ import {
   getCacheStats,
   setCacheMaxBytes,
 } from "../services/cacheStore.js";
+import {
+  clearImageCache,
+  getImageCacheStats,
+  setImageCacheMaxBytes,
+} from "../services/imageCache.js";
+import { logger } from "../logger.js";
 
 const MAX_SETTING_VALUE_BYTES = 128 * 1024;
 const MAX_KEY_LENGTH = 256;
@@ -72,6 +78,37 @@ export function createCacheRoutes(db: Db): Router {
     // Only clears the caller's own namespace (matches sign-in/sign-out cache
     // clearing in the original app without nuking other users' caches).
     res.json(clearCache(db, namespaceFor(req)));
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Artwork cache — global rather than namespaced, so it is administered
+   * globally too: anyone signed in may read the usage (the settings page
+   * shows it to everyone), but the budget and the manual format are admin
+   * only, because both affect every account on the instance.
+   * ------------------------------------------------------------------ */
+
+  router.post("/artwork/stats", requireAuth, limiter, (_req: Request, res: Response) => {
+    res.json(getImageCacheStats(db));
+  });
+
+  router.post("/artwork/setMaxBytes", requireAdmin(db), limiter, (req: Request, res: Response) => {
+    const maxBytes = (req.body as Record<string, unknown> | undefined)?.maxBytes;
+    if (typeof maxBytes !== "number" || !Number.isFinite(maxBytes) || maxBytes <= 0) {
+      res.status(400).json({ error: "maxBytes must be a positive number." });
+      return;
+    }
+    const stats = setImageCacheMaxBytes(db, maxBytes);
+    logger.info("imageCache.budget.updated", {
+      adminId: req.sessionUserId,
+      maxBytes: stats.maxBytes,
+    });
+    res.json(stats);
+  });
+
+  router.post("/artwork/format", requireAdmin(db), limiter, (req: Request, res: Response) => {
+    const stats = clearImageCache(db);
+    logger.info("imageCache.formatted", { adminId: req.sessionUserId });
+    res.json(stats);
   });
 
   return router;

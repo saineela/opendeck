@@ -10,7 +10,7 @@ import {
   IconUserPlus,
 } from "@tabler/icons-react";
 import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
-import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
+import { getArtworkUrlCandidates, toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
@@ -174,7 +174,7 @@ export function ArtistView({
           {currentArtistArtworkUrl ? (
             <img
               key={currentArtistArtworkUrl}
-              src={currentArtistArtworkUrl}
+              src={toCachedArtworkUrl(currentArtistArtworkUrl)}
               alt=""
               onError={() => {
                 setArtistArtworkIndex((prev) => prev + 1);

@@ -320,6 +320,7 @@ describe("server integration", () => {
         role: null,
         needsSetup: true,
         oauthProvider: { name: "Google", configured: true },
+        instanceTheme: null,
       });
     });
 
@@ -400,6 +401,7 @@ describe("server integration", () => {
         role: "admin",
         needsSetup: false,
         oauthProvider: { name: "Google", configured: true },
+        instanceTheme: null,
       });
 
       // The session persists across subsequent requests (browser refresh).

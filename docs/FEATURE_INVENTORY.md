@@ -34,6 +34,7 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 | 12 | **Sign-in** (Google account → YouTube Music session) | Native webview + cookie polling + keychain encryption (`sign_in_youtube_music`) | Google login webview | **Two-part web equivalent:** (a) Google Sign-In (OAuth 2.0 code+PKCE, env credentials) = app account/session; (b) YouTube Music account connect via youtubei.js device-code OAuth (`verificationUrl`+`userCode`, matches original `AuthPrompt` type), tokens stored server-side encrypted, injected as `Authorization: Bearer` by the proxy | **Rebuilt (web constraints)** |
 | 13 | Sign out (revoke + clear cache) | `delete_youtube_music_cookie` etc. | — | Server revokes OAuth token, deletes rows, clears user cache namespace | Rebuilt |
 | 14 | Caching (disk LRU, size limit, stats, clear) | Rust `cache_*` commands | Filesystem | Server SQLite LRU cache with byte cap + `/api/cache/*` endpoints | Rebuilt |
+| 14b | Artwork cache (album art, thumbnails, channel avatars) | Not cached — every `<img>` hit Google directly | Filesystem | `GET /api/artwork?url=…` serves SQLite **BLOBs** keyed by `sha256(url)`, once per instance instead of once per browser. ETag/304, concurrent-miss coalescing, 5 s failure cooldown, `immutable` 30-day browser caching. Budget is admin-set (64 MB – 64 GB) and enforced by evicting least-played artwork first, using `play_history` matched through a normalized artwork identity. Admins get a manual “format” that empties the cache and VACUUMs the file back down. | **Added beyond original** |
 | 15 | Durable app settings | Rust `app_setting_*` | JSON file | Server SQLite per-user settings `/api/settings/*` + localStorage mirror (original dual-write pattern kept) | Rebuilt |
 | 16 | Stream URL resolution / quality (normal/high) | `resolveStream` client order + `audioQuality.ts` | InnerTube player | Reuse | Reuse |
 | 17 | Play reports (watchtime stats ping) | `beginPlayReport/updatePlayReport` | `pagestats` via proxy | Reuse (Bearer injected when signed in) | Reuse |
@@ -65,9 +66,9 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 1. `/api/yt/proxy` — mirrors `proxy_http_request`: `{url, method, headers, body_base64, timeout_ms}` → `{status, headers, body_base64}`. Host allowlist; injects `Authorization: Bearer <YouTube OAuth access token>` for signed-in sessions with a linked YouTube account (replaces SAPISID cookie auth); automatic token refresh.
 2. Google OAuth 2.0 authorization-code + PKCE (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`), discovery against accounts.google.com; sessions in SQLite, httpOnly `SameSite=Lax` cookie, revocable.
 3. YouTube device-code OAuth (server-side, youtubei.js `OAuth2` endpoints at `youtube.com/o/oauth2/*`), tokens AES-256-GCM encrypted at rest keyed by `APP_SECRET`, per user.
-4. SQLite (`node:sqlite`): users, sessions, oauth tokens, cache entries (LRU + byte cap), durable settings, api keys.
+4. SQLite (`node:sqlite`): users, sessions, oauth tokens, cache entries (LRU + byte cap), image cache (BLOBs + byte cap), durable settings, api keys.
 5. `/api/media/download` — resolve + stream audio bytes (Range-capable) for the downloader plugin.
-6. `/api/cache/*`, `/api/settings/*` — ports of Rust cache/app-setting commands.
+6. `/api/cache/*`, `/api/settings/*` — ports of Rust cache/app-setting commands. `/api/artwork` is new: the shared binary image cache described in row 14b, with its admin budget/format controls at `/api/cache/artwork/*` and `/api/admin/image-cache`.
 7. `/api/keys` — per-account API keys (Bearer `odk_…`), SHA-256-hashed at rest; management requires a browser session.
 
 ## Explicitly not reproducible on the web (documented in README)

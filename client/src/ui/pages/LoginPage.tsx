@@ -234,7 +234,7 @@ export function LoginPage({ onSignedIn, onCancel }: LoginPageProps) {
       <aside className={styles.brand}>
         <div className={styles.brandTop}>
           <span className={styles.logoMark} aria-hidden="true">
-            <IconKey size={26} />
+            <img className={styles.logoImage} src="/img/opendeck-logo.png" alt="" />
           </span>
           <span className={styles.wordmark}>OpenDeck</span>
         </div>
