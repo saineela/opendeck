@@ -15,11 +15,13 @@ import {
 import { DOWNLOADER_PLUGIN_ID } from "./manifest";
 
 /**
- * Web implementation of the official downloader plugin. Streams are fetched
- * through the backend with progress reporting, persisted to IndexedDB for
- * offline playback, and handed to the browser's download manager so the file
- * lands in the user's Downloads folder (the desktop app wrote directly to a
- * chosen folder — the browser cannot write arbitrary paths).
+ * Offline audio cache (the desktop app's "downloader").
+ *
+ * Streams are fetched through the backend with progress reporting and
+ * persisted to IndexedDB so tracks keep playing without a network. Unlike the
+ * desktop build, nothing is handed to the browser's download manager: this
+ * app deliberately has no "save file to disk" feature — the bytes exist only
+ * as app-managed offline storage.
  */
 
 const MANIFEST_KEY = "plugin.downloader.manifest.v1";
@@ -29,7 +31,6 @@ const CHANGE_EVENT = "downloader-store-change";
 type DownloadStatus = "absent" | "queued" | "downloading" | "paused" | "ready" | "failed";
 
 interface DownloaderSettings {
-  downloadPath: string | null;
   quality: AudioQuality;
 }
 
@@ -39,7 +40,6 @@ export interface DownloadEntry {
   artist: string;
   album?: string;
   mimeType: string;
-  filePath: string;
   byteLength: number;
   downloadedAt: number;
   artworkUrl?: string;
@@ -70,40 +70,8 @@ type ActiveDownload = {
 
 let activeDownload: ActiveDownload | null = null;
 
-function sanitizeFilenamePart(value: string): string {
-  return value
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function downloadFilename(track: Track, mimeType: string): string {
-  const extension = mimeType.includes("webm")
-    ? ".webm"
-    : mimeType.includes("flac")
-      ? ".flac"
-      : mimeType.includes("mpeg")
-        ? ".mp3"
-        : ".m4a";
-  const base = sanitizeFilenamePart(`${track.artist} - ${track.title}`) || track.id;
-  return `${base}${extension}`;
-}
-
-function triggerBrowserSave(blob: Blob, filename: string): void {
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  anchor.rel = "noopener";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-}
 const listeners = new Set<() => void>();
 const DEFAULT_SETTINGS: DownloaderSettings = {
-  downloadPath: "Downloads",
   quality: "normal",
 };
 
@@ -175,9 +143,6 @@ function readSettings(): DownloaderSettings {
     if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
     const value = parsed as Partial<DownloaderSettings>;
     return {
-      downloadPath: typeof value.downloadPath === "string" && value.downloadPath.trim()
-        ? value.downloadPath
-        : null,
       quality: value.quality === "low" || value.quality === "high" ? value.quality : "normal",
     };
   } catch {
@@ -197,7 +162,7 @@ function commitEntries(entries: Record<string, DownloadEntry>): void {
 
 function reportDownloadFailure(track: Track, message: string): void {
   appErrorManager.report(`${track.title}: ${message}`, {
-    title: "Download failed",
+    title: "Couldn't save for offline",
   });
 }
 
@@ -230,9 +195,6 @@ export async function hydrateDownloaderStore(): Promise<void> {
   const durableSettings = await getAppSetting<DownloaderSettings>(SETTINGS_KEY);
   if (durableSettings && typeof durableSettings === "object") {
     settings = {
-      downloadPath: typeof durableSettings.downloadPath === "string"
-        ? durableSettings.downloadPath
-        : settings.downloadPath,
       quality: durableSettings.quality === "low" || durableSettings.quality === "high"
         ? durableSettings.quality
         : durableSettings.quality === "normal"
@@ -297,12 +259,6 @@ export function togglePlaylistDownloads(tracks: Track[]): void {
     return;
   }
   queueDownloads(tracks);
-}
-
-export async function setDownloadPath(downloadPath: string): Promise<void> {
-  const settings = { ...state.settings, downloadPath };
-  writeSettings(settings);
-  setState({ settings });
 }
 
 export async function setDownloadQuality(quality: AudioQuality): Promise<void> {
@@ -401,7 +357,6 @@ async function pump(): Promise<void> {
 
         const mimeType =
           stream.mimeType || response.headers.get("content-type") || "audio/mp4";
-        const filename = downloadFilename(track, mimeType);
         const totalBytes = Number(response.headers.get("content-length") ?? 0);
         const chunks: BlobPart[] = [];
         let receivedBytes = 0;
@@ -427,10 +382,9 @@ async function pump(): Promise<void> {
 
         const blob = new Blob(chunks, { type: mimeType });
         if (blob.size === 0) {
-          throw new Error("Audio download returned no data.");
+          throw new Error("Audio source returned no data.");
         }
         await saveDownloadBlob(trackId, blob);
-        triggerBrowserSave(blob, filename);
 
         const { [trackId]: _pending, ...pending } = state.pending;
         commitEntries({
@@ -441,7 +395,6 @@ async function pump(): Promise<void> {
             artist: track.artist,
             album: track.album,
             mimeType,
-            filePath: filename,
             byteLength: blob.size,
             downloadedAt: Date.now(),
             artworkUrl: track.artworkUrl,

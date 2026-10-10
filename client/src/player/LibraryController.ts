@@ -10,6 +10,22 @@ import type {
   Track,
 } from "../datasource/types";
 import { logInternalError, logInternalInfo } from "../internal/logging";
+import { getAuthSnapshot, signOut as signOutAppAccount } from "../auth/authClient";
+import {
+  addTracksToAppPlaylist,
+  appPlaylistToPlaylist,
+  createAppPlaylist,
+  deleteAppPlaylist,
+  fetchAppPlaylistTracks,
+  fetchLibrarySnapshot,
+  isAppPlaylist,
+  likeAppTrack,
+  renameAppPlaylist,
+  removeTrackFromAppPlaylist,
+  reorderAppPlaylist,
+  serverTrackToTrack,
+  unlikeAppTrack,
+} from "../auth/appLibrary";
 import {
   addLocalTrackToPlaylist,
   getLocalPlaylistTrackPage,
@@ -50,6 +66,15 @@ function delay(ms: number): Promise<void> {
 export class LibraryController {
   private readonly listeners = new Set<Listener>();
   private initializationPromise: Promise<void> | null = null;
+  private appLibraryPromise: Promise<void> | null = null;
+  /** This account's server-side library (playlists + likes), if signed in. */
+  private appLibrary: {
+    playlists: Playlist[];
+    likedSongs: Track[];
+    tracks: Map<string, Track[]>;
+  } | null = null;
+  /** True once a YouTube Music library snapshot has been loaded this session. */
+  private hasYouTubeLibrary = false;
   private state: LibraryState = {
     status: "restoring",
     authPrompt: null,
@@ -74,8 +99,124 @@ export class LibraryController {
       return this.initializationPromise;
     }
 
-    this.initializationPromise = this.restoreSession();
+    this.initializationPromise = this.restoreSession().then(() => this.loadAppLibrary());
     return this.initializationPromise;
+  }
+
+  /**
+   * Pulls this account's library from the server and merges it into state.
+   * Safe to call whenever the auth session changes; a signed-out caller
+   * simply drops the app-owned data.
+   */
+  async loadAppLibrary(): Promise<void> {
+    if (this.appLibraryPromise) return this.appLibraryPromise;
+    this.appLibraryPromise = (async () => {
+      try {
+        if (!getAuthSnapshot().authenticated) {
+          this.appLibrary = null;
+          this.mergeAppLibrary();
+          return;
+        }
+        const payload = await fetchLibrarySnapshot();
+        this.appLibrary = {
+          playlists: payload.playlists.map(appPlaylistToPlaylist),
+          likedSongs: payload.likedSongs.map(serverTrackToTrack),
+          tracks: new Map(
+            payload.playlists.map((playlist) => [
+              playlist.id,
+              playlist.tracks.map(serverTrackToTrack),
+            ]),
+          ),
+        };
+        this.mergeAppLibrary();
+        logInternalInfo("LibraryController.loadAppLibrary success", {
+          playlistCount: payload.counts.playlists,
+          likedSongCount: payload.counts.likedSongs,
+        });
+      } catch (error) {
+        logInternalError("LibraryController.loadAppLibrary failed", error);
+      } finally {
+        this.appLibraryPromise = null;
+      }
+    })();
+    return this.appLibraryPromise;
+  }
+
+  /**
+   * Folds the server-side library into the current snapshot.
+   *
+   * With YouTube linked, the two libraries are unioned (app playlists first,
+   * app likes first). Without it, an app-only snapshot is synthesised so a
+   * signed-in user still has a working library on any device.
+   */
+  private mergeAppLibrary(): void {
+    const app = this.appLibrary;
+    const current = this.state.library;
+
+    if (current) {
+      const ytPlaylists = current.playlists.filter((playlist) => !isAppPlaylist(playlist));
+      const ytLikes = current.likedSongs.filter(
+        (track) => !(app?.likedSongs.some((liked) => liked.id === track.id) ?? false),
+      );
+      const playlists = [...(app?.playlists ?? []), ...ytPlaylists];
+      const likedSongs = [...(app?.likedSongs ?? []), ...ytLikes];
+      if (
+        playlists.length === current.playlists.length &&
+        likedSongs.length === current.likedSongs.length
+      ) {
+        return; // no visible change — don't churn subscribers
+      }
+      this.setState({
+        library: { ...current, playlists, likedSongs },
+        ...(this.state.status === "signed-out" ? { status: "ready" as const } : {}),
+      });
+      return;
+    }
+
+    if (!app) return;
+    const auth = getAuthSnapshot();
+    this.setState({
+      status: "ready",
+      authPrompt: null,
+      error: null,
+      library: {
+        account: { name: auth.user?.name ?? "You" },
+        albums: [],
+        playlists: app.playlists,
+        likedSongsPlaylist: {
+          id: "liked-songs",
+          title: "Liked songs",
+          owner: "You",
+          kind: "liked-songs",
+          isEditable: false,
+        },
+        likedSongs: app.likedSongs,
+        recentlyPlayed: [],
+      },
+    });
+  }
+
+  /** Creates one of this account's playlists on the server. */
+  async createPlaylist(name: string): Promise<Playlist> {
+    const playlist = appPlaylistToPlaylist(await createAppPlaylist(name));
+    await this.loadAppLibrary();
+    if (!this.appLibrary) this.appLibrary = { playlists: [playlist], likedSongs: [], tracks: new Map() };
+    else this.appLibrary.tracks.set(playlist.id, []);
+    this.mergeAppLibrary();
+    return playlist;
+  }
+
+  async renamePlaylist(playlist: Playlist, name: string): Promise<void> {
+    await renameAppPlaylist(playlist.id, name);
+    await this.loadAppLibrary();
+    this.mergeAppLibrary();
+  }
+
+  async deletePlaylist(playlist: Playlist): Promise<void> {
+    await deleteAppPlaylist(playlist.id);
+    this.appLibrary?.tracks.delete(playlist.id);
+    await this.loadAppLibrary();
+    this.mergeAppLibrary();
   }
 
   async recoverConnection(): Promise<void> {
@@ -138,7 +279,18 @@ export class LibraryController {
 
   async signOut(): Promise<void> {
     try {
+      // End the OpenDeck session too — the account, not just YouTube,
+      // owns this browser's library view.
+      if (getAuthSnapshot().authenticated) {
+        try {
+          await signOutAppAccount();
+        } catch (error) {
+          logInternalError("LibraryController.signOut server session failed", error);
+        }
+      }
       await this.dataSource.signOut?.();
+      this.appLibrary = null;
+      this.hasYouTubeLibrary = false;
       this.setState({
         status: "signed-out",
         authPrompt: null,
@@ -170,12 +322,30 @@ export class LibraryController {
   }
 
   private applyLibrary(library: LibrarySnapshot): void {
-    this.setState({ status: "ready", library, authPrompt: null, error: null });
+    this.hasYouTubeLibrary = true;
+    // Re-merge the account's own playlists/likes so both libraries are visible.
+    const app = this.appLibrary;
+    const merged: LibrarySnapshot = app
+      ? {
+          ...library,
+          playlists: [
+            ...app.playlists,
+            ...library.playlists.filter((playlist) => !isAppPlaylist(playlist)),
+          ],
+          likedSongs: [
+            ...app.likedSongs,
+            ...library.likedSongs.filter(
+              (track) => !app.likedSongs.some((liked) => liked.id === track.id),
+            ),
+          ],
+        }
+      : library;
+    this.setState({ status: "ready", library: merged, authPrompt: null, error: null });
     logInternalInfo("LibraryController.refresh success", {
-      albumCount: library.albums.length,
-      playlistCount: library.playlists.length,
-      likedSongCount: library.likedSongs.length,
-      recentTrackCount: library.recentlyPlayed.length,
+      albumCount: merged.albums.length,
+      playlistCount: merged.playlists.length,
+      likedSongCount: merged.likedSongs.length,
+      recentTrackCount: merged.recentlyPlayed.length,
     });
   }
 
@@ -280,6 +450,17 @@ export class LibraryController {
   }
 
   async getPlaylistTracks(playlist: Playlist, onUpdate?: (tracks: Track[]) => void): Promise<Track[]> {
+    if (isAppPlaylist(playlist)) {
+      const tracks = await this.ensureAppPlaylistTracks(playlist.id);
+      if (tracks.length > 0) onUpdate?.(tracks);
+      return tracks;
+    }
+    if (playlist.kind === "liked-songs" && !this.hasYouTubeLibrary) {
+      // No linked YouTube account: serve this account's own likes.
+      const liked = this.state.library?.likedSongs ?? [];
+      if (liked.length > 0) onUpdate?.(liked);
+      return liked;
+    }
     if (isLocalPlaylist(playlist)) {
       const page = await getLocalPlaylistTrackPage(playlist);
       if (page.tracks.length > 0) onUpdate?.(page.tracks);
@@ -301,6 +482,20 @@ export class LibraryController {
     pageKey?: string,
     onUpdate?: (page: TrackPage) => void,
   ): Promise<TrackPage> {
+    if (isAppPlaylist(playlist)) {
+      const page: TrackPage = {
+        tracks: pageKey ? [] : await this.ensureAppPlaylistTracks(playlist.id),
+        hasMore: false,
+      };
+      if (page.tracks.length > 0) onUpdate?.(page);
+      return page;
+    }
+    if (playlist.kind === "liked-songs" && !this.hasYouTubeLibrary) {
+      const liked = pageKey ? [] : this.state.library?.likedSongs ?? [];
+      const page: TrackPage = { tracks: liked, hasMore: false };
+      if (page.tracks.length > 0) onUpdate?.(page);
+      return page;
+    }
     if (isLocalPlaylist(playlist)) {
       const page = pageKey ? { tracks: [], hasMore: false } : await getLocalPlaylistTrackPage(playlist);
       if (page.tracks.length > 0) onUpdate?.(page);
@@ -335,6 +530,16 @@ export class LibraryController {
     track: Track,
     playlist: Playlist,
   ): Promise<"added" | "already-present"> {
+    if (isAppPlaylist(playlist)) {
+      const existing = this.appLibrary?.tracks.get(playlist.id);
+      if (existing?.some((item) => item.id === track.id)) return "already-present";
+      await addTracksToAppPlaylist(playlist.id, [track]);
+      if (existing) existing.push(track);
+      else this.appLibrary?.tracks.set(playlist.id, [track]);
+      await this.loadAppLibrary();
+      this.mergeAppLibrary();
+      return "added";
+    }
     if (track.source === "local") {
       if (isLocalPlaylist(playlist)) {
         throw new Error("Local songs are already managed from Local Files.");
@@ -345,12 +550,20 @@ export class LibraryController {
       throw new Error("Adding songs to playlists is unavailable.");
     }
     if (this.state.status === "signed-out" || !this.state.library) {
-      throw new Error("Sign in to YouTube Music before adding songs to playlists.");
+      throw new Error("Sign in before adding songs to playlists.");
     }
     return this.dataSource.addTrackToPlaylist(track, playlist);
   }
 
   async removeTrackFromPlaylist(track: Track, playlist: Playlist): Promise<void> {
+    if (isAppPlaylist(playlist)) {
+      await removeTrackFromAppPlaylist(playlist.id, track.id);
+      const existing = this.appLibrary?.tracks.get(playlist.id);
+      if (existing) this.appLibrary?.tracks.set(playlist.id, existing.filter((item) => item.id !== track.id));
+      await this.loadAppLibrary();
+      this.mergeAppLibrary();
+      return;
+    }
     if (track.source === "local" && !isLocalPlaylist(playlist)) {
       removeLocalTrackFromPlaylist(track, playlist);
       return;
@@ -412,8 +625,11 @@ export class LibraryController {
   }
 
   async setTrackLiked(track: Track, liked: boolean): Promise<void> {
-    if (!this.dataSource.setTrackLiked) {
-      throw new Error("Liking songs is unavailable.");
+    const auth = getAuthSnapshot();
+    const useAppLibrary = auth.authenticated;
+    const useYouTube = Boolean(this.dataSource.setTrackLiked) && this.hasYouTubeLibrary;
+    if (!useAppLibrary && !useYouTube) {
+      throw new Error("Sign in to like");
     }
     if (this.state.status === "signed-out" || !this.state.library) {
       throw new Error("Sign in to like");
@@ -433,7 +649,29 @@ export class LibraryController {
     });
 
     try {
-      await this.dataSource.setTrackLiked(track, liked);
+      if (useAppLibrary) {
+        // The account's own list on the server is authoritative; a failure
+        // here rolls the optimistic update back rather than silently drifting.
+        if (liked) await likeAppTrack(track);
+        else await unlikeAppTrack(track.id);
+        if (this.appLibrary) {
+          this.appLibrary = {
+            ...this.appLibrary,
+            likedSongs: liked
+              ? [track, ...this.appLibrary.likedSongs.filter((item) => item.id !== track.id)]
+              : this.appLibrary.likedSongs.filter((item) => item.id !== track.id),
+          };
+        }
+      }
+      if (useYouTube && auth.youtubeLinked && this.dataSource.setTrackLiked) {
+        // Mirror to YouTube Music when it is linked. Best effort: the like is
+        // already saved to this account, so a YouTube hiccup must not undo it.
+        try {
+          await this.dataSource.setTrackLiked(track, liked);
+        } catch (error) {
+          logInternalError("LibraryController.setTrackLiked YouTube mirror failed", error);
+        }
+      }
     } catch (error) {
       this.setState({ library: previousLibrary });
       throw error;
@@ -442,6 +680,27 @@ export class LibraryController {
       nextPending.delete(track.id);
       this.setState({ pendingLikeTrackIds: nextPending });
     }
+  }
+
+  /** Loads (and caches) an account-owned playlist's tracks from the server. */
+  private async ensureAppPlaylistTracks(playlistId: string): Promise<Track[]> {
+    if (!this.appLibrary) return [];
+    const cached = this.appLibrary.tracks.get(playlistId);
+    if (cached) return cached;
+    try {
+      const tracks = await fetchAppPlaylistTracks(playlistId);
+      this.appLibrary.tracks.set(playlistId, tracks);
+      return tracks;
+    } catch (error) {
+      logInternalError("LibraryController.ensureAppPlaylistTracks failed", error);
+      return [];
+    }
+  }
+
+  async reorderAppPlaylistTracks(playlist: Playlist, trackIds: string[]): Promise<void> {
+    await reorderAppPlaylist(playlist.id, trackIds);
+    const tracks = await fetchAppPlaylistTracks(playlist.id);
+    this.appLibrary?.tracks.set(playlist.id, tracks);
   }
 
   private setFailure(message: string, error: unknown) {

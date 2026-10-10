@@ -1,4 +1,4 @@
-import appIcon from "../../../assets/img/Logo.png";
+import appIcon from "../../../assets/img/opendeck.svg";
 import styles from "./AppLoadingScreen.module.css";
 
 const LOADING_LINES = [
@@ -28,8 +28,9 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
       <div className={styles.content}>
         <img className={styles.mark} src={appIcon} alt="" />
         <div className={styles.wordmark}>
-          <strong>{loadingLine}</strong>
+          <strong>OpenDeck</strong>
         </div>
+        <p className={styles.loadingLine}>{loadingLine}</p>
         <div className={styles.progress} aria-hidden="true">
           <span />
         </div>

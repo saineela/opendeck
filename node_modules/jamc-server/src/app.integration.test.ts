@@ -11,6 +11,7 @@ import { createApp } from "./app.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { openDatabase, type Db } from "./db.js";
 import { SESSION_COOKIE, createSession } from "./middleware/session.js";
+import { recordPlay } from "./services/playHistory.js";
 import { resetDiscoveryCache } from "./services/googleOAuth.js";
 import { resetYouTubeClientIdentityCache } from "./services/youtubeOAuth.js";
 
@@ -281,6 +282,28 @@ describe("server integration", () => {
     });
   });
 
+  describe("request body parsing", () => {
+    it("returns 400 for malformed JSON", async () => {
+      const res = await fetch(`${running.base}/api/cache/get`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: running.base },
+        body: "{not json",
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Invalid JSON body." });
+    });
+
+    it("returns 413 for bodies over the JSON limit", async () => {
+      const res = await fetch(`${running.base}/api/cache/set`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: running.base },
+        body: JSON.stringify({ key: "huge", value: "x".repeat(11 * 1024 * 1024) }),
+      });
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: "Request body too large." });
+    });
+  });
+
   describe("unauthenticated session state", () => {
     it("reports signed-out state", async () => {
       const res = await fetch(`${running.base}/api/auth/session`);
@@ -288,6 +311,15 @@ describe("server integration", () => {
         authenticated: false,
         user: null,
         youtubeLinked: false,
+        totpEnabled: false,
+        authProvider: null,
+        passwordLoginEnabled: true,
+        registrationEnabled: true,
+        googleSignInEnabled: true,
+        inviteCodeRequired: false,
+        role: null,
+        needsSetup: true,
+        oauthProvider: { name: "Google", configured: true },
       });
     });
 
@@ -319,15 +351,15 @@ describe("server integration", () => {
       fake.expectedChallenge = authorize.searchParams.get("code_challenge");
 
       const setCookies = start.headers.getSetCookie();
-      const oauthCookie = cookieFrom(setCookies, "jamac_oauth");
+      const oauthCookie = cookieFrom(setCookies, "od_oauth");
       expect(oauthCookie).toBeTruthy();
-      const oauthRaw = setCookies.find((raw) => raw.startsWith("jamac_oauth=")) ?? "";
+      const oauthRaw = setCookies.find((raw) => raw.startsWith("od_oauth=")) ?? "";
       expect(oauthRaw).toContain("HttpOnly");
       expect(oauthRaw).toContain("SameSite=Lax");
 
       const callback = await fetch(
         `${running.base}/api/auth/google/callback?code=fake-code&state=${encodeURIComponent(stateParam!)}`,
-        { headers: { cookie: `jamac_oauth=${oauthCookie}` }, redirect: "manual" },
+        { headers: { cookie: `od_oauth=${oauthCookie}` }, redirect: "manual" },
       );
       expect(callback.status).toBe(200);
       const html = await callback.text();
@@ -358,6 +390,16 @@ describe("server integration", () => {
           picture: "https://example.com/avatar.png",
         },
         youtubeLinked: false,
+        totpEnabled: false,
+        authProvider: "google",
+        passwordLoginEnabled: true,
+        registrationEnabled: true,
+        googleSignInEnabled: true,
+        inviteCodeRequired: false,
+        // First account on the instance → admin (first-run bootstrap).
+        role: "admin",
+        needsSetup: false,
+        oauthProvider: { name: "Google", configured: true },
       });
 
       // The session persists across subsequent requests (browser refresh).
@@ -403,10 +445,10 @@ describe("server integration", () => {
         redirect: "manual",
       });
       expect(start.status).toBe(302);
-      const oauthCookie = cookieFrom(start.headers.getSetCookie(), "jamac_oauth");
+      const oauthCookie = cookieFrom(start.headers.getSetCookie(), "od_oauth");
       const res = await fetch(
         `${running.base}/api/auth/google/callback?code=x&state=wrong-state`,
-        { headers: { cookie: `jamac_oauth=${oauthCookie}` }, redirect: "manual" },
+        { headers: { cookie: `od_oauth=${oauthCookie}` }, redirect: "manual" },
       );
       expect(res.status).toBe(400);
       expect(await res.text()).toContain("state mismatch");
@@ -416,20 +458,578 @@ describe("server integration", () => {
       const start = await fetch(`${running.base}/api/auth/google/start`, {
         redirect: "manual",
       });
-      const oauthCookie = cookieFrom(start.headers.getSetCookie(), "jamac_oauth");
+      const oauthCookie = cookieFrom(start.headers.getSetCookie(), "od_oauth");
       const tampered = `${oauthCookie!.slice(0, -1)}${oauthCookie!.endsWith("a") ? "b" : "a"}`;
       const res = await fetch(
         `${running.base}/api/auth/google/callback?code=x&state=y`,
-        { headers: { cookie: `jamac_oauth=${tampered}` }, redirect: "manual" },
+        { headers: { cookie: `od_oauth=${tampered}` }, redirect: "manual" },
       );
       expect(res.status).toBe(400);
       expect(await res.text()).toContain("could not be verified");
     });
   });
 
+  describe("cross-device QR sign-in", () => {
+    it("hands the consent to the phone and issues the session only to the verifying desktop", async () => {
+      // 1. The desktop arms an attempt and renders its link as a QR code.
+      const start = await fetch(`${running.base}/api/auth/google/qr/start`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(start.status).toBe(200);
+      const { attemptId, qrUrl, expiresInSec } = (await start.json()) as {
+        attemptId: string;
+        qrUrl: string;
+        expiresInSec: number;
+      };
+      expect(attemptId).toBeTruthy();
+      expect(qrUrl).toContain(`/api/auth/google/qr/open?attempt=${attemptId}`);
+      expect(expiresInSec).toBe(600);
+
+      // 2. Verifying before the phone did anything reports pending.
+      const early = await fetch(`${running.base}/api/auth/google/qr/verify`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: JSON.stringify({ attemptId }),
+      });
+      expect(early.status).toBe(200);
+      expect(await early.json()).toEqual({ status: "pending" });
+
+      // 3. The phone scans the code: open → redirect to the provider.
+      const open = await fetch(
+        `${running.base}/api/auth/google/qr/open?attempt=${attemptId}`,
+        { redirect: "manual" },
+      );
+      expect(open.status).toBe(302);
+      const authorize = new URL(open.headers.get("location")!);
+      expect(authorize.origin).toBe(fake.origin);
+      const stateParam = authorize.searchParams.get("state");
+      expect(stateParam).toBeTruthy();
+      fake.expectedChallenge = authorize.searchParams.get("code_challenge");
+
+      const openCookies = open.headers.getSetCookie();
+      const oauthCookie = cookieFrom(openCookies, "od_oauth");
+      const qrCookie = cookieFrom(openCookies, "od_qr_attempt");
+      expect(oauthCookie).toBeTruthy();
+      expect(qrCookie).toBe(attemptId);
+      // The marker is path-scoped so it can never influence a non-QR callback.
+      const qrRaw = openCookies.find((raw) => raw.startsWith("od_qr_attempt=")) ?? "";
+      expect(qrRaw).toContain("Path=/api/auth");
+      expect(qrRaw).toContain("HttpOnly");
+
+      // 4. The phone finishes the consent at the callback: confirmation page,
+      //    but NO session cookie — this browser is not the desktop.
+      const callback = await fetch(
+        `${running.base}/api/auth/google/callback?code=fake-qr-code&state=${encodeURIComponent(stateParam!)}`,
+        {
+          headers: { cookie: `od_oauth=${oauthCookie}; od_qr_attempt=${qrCookie}` },
+          redirect: "manual",
+        },
+      );
+      expect(callback.status).toBe(200);
+      expect(await callback.text()).toContain("Signed in on your computer");
+      expect(cookieFrom(callback.headers.getSetCookie(), SESSION_COOKIE)).toBeNull();
+
+      // 5. The desktop presses Verify: the session is minted for THIS client.
+      const verify = await fetch(`${running.base}/api/auth/google/qr/verify`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: JSON.stringify({ attemptId }),
+      });
+      expect(verify.status).toBe(200);
+      const verified = (await verify.json()) as {
+        status: string;
+        user: { email: string | null };
+      };
+      expect(verified.status).toBe("verified");
+      expect(verified.user.email).toBe("test@example.com");
+      const sid = cookieFrom(verify.headers.getSetCookie(), SESSION_COOKIE);
+      expect(sid).toMatch(/^[a-f0-9]{64}$/);
+
+      const sessionRes = await fetch(`${running.base}/api/auth/session`, {
+        headers: { cookie: `${SESSION_COOKIE}=${sid}` },
+      });
+      expect(
+        ((await sessionRes.json()) as { authenticated: boolean }).authenticated,
+      ).toBe(true);
+
+      // 6. Attempts are single-use: replaying Verify, rescanning the QR, and
+      //    unknown ids are all refused.
+      const replay = await fetch(`${running.base}/api/auth/google/qr/verify`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: JSON.stringify({ attemptId }),
+      });
+      expect(replay.status).toBe(409);
+      const rescanned = await fetch(
+        `${running.base}/api/auth/google/qr/open?attempt=${attemptId}`,
+        { redirect: "manual" },
+      );
+      expect(rescanned.status).toBe(404);
+      const unknown = await fetch(`${running.base}/api/auth/google/qr/verify`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: JSON.stringify({ attemptId: "not-a-real-attempt" }),
+      });
+      expect(unknown.status).toBe(404);
+      const missing = await fetch(`${running.base}/api/auth/google/qr/verify`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(missing.status).toBe(400);
+    });
+  });
+
+  describe("play history and API key statistics", () => {
+    it("records plays, serves history + stats per user, and reports per-key statistics", async () => {
+      seedUser(db, "hist-user", "History User");
+      const sid = createSession(db, "hist-user");
+      const cookie = `${SESSION_COOKIE}=${sid}`;
+      const jsonHeaders = { origin: running.base, "content-type": "application/json", cookie };
+
+      // An API key to attribute plays to.
+      const keyRes = await fetch(`${running.base}/api/keys`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ label: "Stereo" }),
+      });
+      expect(keyRes.status).toBe(201);
+      const key = (await keyRes.json()) as { id: string };
+
+      // The stream endpoint records: app plays, API-key plays, and dedupes
+      // repeated ranged requests of the same track.
+      const now = Date.now();
+      expect(
+        recordPlay(db, {
+          userId: "hist-user",
+          videoId: "vid-1",
+          title: "Liar",
+          artist: "Camila Cabello",
+          durationSeconds: 185,
+          source: "app",
+          playedAt: now - 60_000,
+        }),
+      ).toBe(true);
+      expect(
+        recordPlay(db, {
+          userId: "hist-user",
+          videoId: "vid-1",
+          title: "Liar",
+          source: "app",
+          playedAt: now - 30_000,
+        }),
+      ).toBe(false); // same track inside the dedupe window
+      recordPlay(db, {
+        userId: "hist-user",
+        videoId: "vid-2",
+        title: "Love Me Again",
+        artist: "John Newman",
+        durationSeconds: 200,
+        source: "api",
+        apiKeyId: key.id,
+        playedAt: now - 120_000,
+      });
+      recordPlay(db, {
+        userId: "hist-user",
+        videoId: "vid-3",
+        title: "Nightcall",
+        artist: "Kavinsky",
+        source: "app",
+        playedAt: now - 5_000,
+      });
+
+      const list = await fetch(`${running.base}/api/history?limit=10`, {
+        headers: { cookie },
+      });
+      expect(list.status).toBe(200);
+      const listed = (await list.json()) as {
+        plays: Array<{ videoId: string; source: string; apiKeyLabel: string | null }>;
+        hasMore: boolean;
+      };
+      expect(listed.plays.map((play) => play.videoId)).toEqual(["vid-3", "vid-1", "vid-2"]);
+      expect(listed.plays[1]!.source).toBe("app");
+      expect(listed.plays[2]!.source).toBe("api");
+      expect(listed.plays[2]!.apiKeyLabel).toBe("Stereo");
+
+      const stats = (await (
+        await fetch(`${running.base}/api/history/stats`, { headers: { cookie } })
+      ).json()) as {
+        totalPlays: number;
+        totalListeningSeconds: number;
+        bySource: { app: number; api: number };
+        topTracks: Array<{ videoId: string; title: string }>;
+      };
+      expect(stats.totalPlays).toBe(3);
+      expect(stats.totalListeningSeconds).toBe(385);
+      expect(stats.bySource).toEqual({ app: 2, api: 1 });
+      expect(stats.topTracks).toHaveLength(3);
+      expect(stats.topTracks.map((track) => track.title)).toContain("Liar");
+
+      // Separate statistics per API key.
+      const keys = (await (
+        await fetch(`${running.base}/api/keys`, { headers: { cookie } })
+      ).json()) as {
+        keys: Array<{
+          label: string;
+          stats: { totalPlays: number; playsLast7Days: number; lastPlayedAt: number | null };
+        }>;
+      };
+      const stereo = keys.keys.find((entry) => entry.label === "Stereo");
+      expect(stereo?.stats).toMatchObject({ totalPlays: 1, playsLast7Days: 1 });
+      expect(stereo?.stats.lastPlayedAt).toBeTruthy();
+
+      // History is per user: another account sees an empty list.
+      seedUser(db, "hist-other", "Other User");
+      const otherSid = createSession(db, "hist-other");
+      const otherList = (await (
+        await fetch(`${running.base}/api/history`, {
+          headers: { cookie: `${SESSION_COOKIE}=${otherSid}` },
+        })
+      ).json()) as { plays: unknown[] };
+      expect(otherList.plays).toEqual([]);
+
+      // Clearing removes only the caller's plays.
+      const cleared = await fetch(`${running.base}/api/history`, {
+        method: "DELETE",
+        headers: { origin: running.base, cookie },
+      });
+      expect(((await cleared.json()) as { removed: number }).removed).toBe(3);
+      const after = (await (
+        await fetch(`${running.base}/api/history`, { headers: { cookie } })
+      ).json()) as { plays: unknown[] };
+      expect(after.plays).toEqual([]);
+    });
+  });
+
+  describe("recommendations and Web Push", () => {
+    it("sends between accounts, serves inbox/sent, marks read, deletes, and lists the directory", async () => {
+      seedUser(db, "rec-sender", "Sender Sam");
+      seedUser(db, "rec-recipient", "Recipient Rita");
+      seedUser(db, "rec-bystander", "Bystander Bea");
+      const senderCookie = `${SESSION_COOKIE}=${createSession(db, "rec-sender")}`;
+      const recipientCookie = `${SESSION_COOKIE}=${createSession(db, "rec-recipient")}`;
+      const jsonHeaders = {
+        origin: running.base,
+        "content-type": "application/json",
+        cookie: senderCookie,
+      };
+
+      // 1. Sending requires the three identifying fields.
+      const missingFields = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ recipientId: "rec-recipient" }),
+      });
+      expect(missingFields.status).toBe(400);
+
+      // 2. Unknown recipients and self-recommendations are refused.
+      const unknown = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ recipientId: "nobody", videoId: "vid-9", title: "Song" }),
+      });
+      expect(unknown.status).toBe(404);
+      const self = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ recipientId: "rec-sender", videoId: "vid-9", title: "Song" }),
+      });
+      expect(self.status).toBe(400);
+
+      // 3. A successful send snapshots the track and returns the item.
+      const sent = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          recipientId: "rec-recipient",
+          videoId: "vid-rec-1",
+          title: "Nightcall",
+          artist: "Kavinsky",
+          album: "OutRun",
+          artworkUrl: "https://i.ytimg.com/vi/vid-rec-1/mqdefault.jpg",
+          durationSeconds: 242.4,
+          note: "This bassline!",
+        }),
+      });
+      expect(sent.status).toBe(201);
+      const created = (await sent.json()) as {
+        recommendation: { id: string; senderName: string; durationSeconds: number; note: string };
+      };
+      expect(created.recommendation.senderName).toBe("Sender Sam");
+      expect(created.recommendation.durationSeconds).toBe(242);
+      expect(created.recommendation.note).toBe("This bassline!");
+
+      // 4. The recipient's inbox carries it, unread, with the sender name.
+      const inbox = (await (
+        await fetch(`${running.base}/api/recommendations`, { headers: { cookie: recipientCookie } })
+      ).json()) as {
+        recommendations: Array<{ id: string; videoId: string; senderName: string; readAt: number | null }>;
+        unreadCount: number;
+      };
+      expect(inbox.recommendations).toHaveLength(1);
+      expect(inbox.recommendations[0]).toMatchObject({
+        videoId: "vid-rec-1",
+        senderName: "Sender Sam",
+        readAt: null,
+      });
+      expect(inbox.unreadCount).toBe(1);
+
+      // The sender's sent list shows the same item; the bystander sees none.
+      const sentList = (await (
+        await fetch(`${running.base}/api/recommendations/sent`, { headers: { cookie: senderCookie } })
+      ).json()) as { recommendations: Array<{ videoId: string }> };
+      expect(sentList.recommendations.map((item) => item.videoId)).toEqual(["vid-rec-1"]);
+      const bystanderInbox = (await (
+        await fetch(`${running.base}/api/recommendations`, {
+          headers: { cookie: `${SESSION_COOKIE}=${createSession(db, "rec-bystander")}` },
+        })
+      ).json()) as { recommendations: unknown[]; unreadCount: number };
+      expect(bystanderInbox.recommendations).toEqual([]);
+      expect(bystanderInbox.unreadCount).toBe(0);
+
+      // 5. Marking read is recipient-only and idempotent.
+      const readByBystander = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}/read`,
+        {
+          method: "POST",
+          headers: { origin: running.base, cookie: `${SESSION_COOKIE}=${createSession(db, "rec-bystander")}` },
+        },
+      );
+      expect(readByBystander.status).toBe(404);
+      const read = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}/read`,
+        {
+          method: "POST",
+          headers: { origin: running.base, cookie: recipientCookie },
+        },
+      );
+      expect(await read.json()).toEqual({ ok: true });
+      const readAgain = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}/read`,
+        {
+          method: "POST",
+          headers: { origin: running.base, cookie: recipientCookie },
+        },
+      );
+      expect(readAgain.status).toBe(200);
+      const afterRead = (await (
+        await fetch(`${running.base}/api/recommendations?unread=1`, { headers: { cookie: recipientCookie } })
+      ).json()) as { recommendations: unknown[]; unreadCount: number };
+      expect(afterRead.recommendations).toEqual([]);
+      expect(afterRead.unreadCount).toBe(0);
+
+      // 6. A bystander cannot delete; the recipient may dismiss.
+      const foreignDelete = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}`,
+        {
+          method: "DELETE",
+          headers: { origin: running.base, cookie: `${SESSION_COOKIE}=${createSession(db, "rec-bystander")}` },
+        },
+      );
+      expect(foreignDelete.status).toBe(404);
+      const recipientDelete = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}`,
+        {
+          method: "DELETE",
+          headers: { origin: running.base, cookie: recipientCookie },
+        },
+      );
+      expect(await recipientDelete.json()).toEqual({ ok: true });
+      const gone = await fetch(
+        `${running.base}/api/recommendations/${created.recommendation.id}`,
+        {
+          method: "DELETE",
+          headers: { origin: running.base, cookie: recipientCookie },
+        },
+      );
+      expect(gone.status).toBe(404);
+
+      // 7. The sender can also retract from their sent list.
+      const retractSend = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ recipientId: "rec-recipient", videoId: "vid-rec-2", title: "Reclaim" }),
+      });
+      expect(retractSend.status).toBe(201);
+      const retractId = ((await retractSend.json()) as { recommendation: { id: string } }).recommendation.id;
+      const retract = await fetch(`${running.base}/api/recommendations/${retractId}`, {
+        method: "DELETE",
+        headers: { origin: running.base, cookie: senderCookie },
+      });
+      expect(await retract.json()).toEqual({ ok: true });
+    });
+
+    it("refuses every route without authentication", async () => {
+      for (const [method, route] of [
+        ["GET", ""],
+        ["GET", "sent"],
+        ["GET", "directory"],
+        ["POST", ""],
+      ] as const) {
+        const res = await fetch(`${running.base}/api/recommendations${route ? `/${route}` : ""}`, {
+          method,
+          headers: { origin: running.base, "content-type": "application/json" },
+          ...(method === "POST" ? { body: "{}" } : {}),
+        });
+        expect(res.status, `${method} ${route || "/"}`).toBe(401);
+      }
+      const pushKey = await fetch(`${running.base}/api/push/vapid-public-key`);
+      expect(pushKey.status).toBe(401);
+      for (const route of ["subscribe", "unsubscribe"]) {
+        const res = await fetch(`${running.base}/api/push/${route}`, {
+          method: "POST",
+          headers: { origin: running.base, "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(res.status, route).toBe(401);
+      }
+    });
+
+    it("serves the account directory without self or emails", async () => {
+      seedUser(db, "dir-user-a", "Alice");
+      seedUser(db, "dir-user-b", "Bob");
+      const cookie = `${SESSION_COOKIE}=${createSession(db, "dir-user-a")}`;
+      const res = await fetch(`${running.base}/api/recommendations/directory`, {
+        headers: { cookie },
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      // Names may appear, but email addresses never do.
+      expect(text).not.toContain("@example.com");
+      const { users } = JSON.parse(text) as { users: Array<{ id: string; name: string }> };
+      const ids = users.map((user) => user.id);
+      expect(ids).toContain("dir-user-b");
+      expect(ids).not.toContain("dir-user-a");
+    });
+
+    it("accepts bearer API keys for recommendations but not for push subscriptions", async () => {
+      seedUser(db, "rec-key-user", "Key User");
+      seedUser(db, "rec-key-peer", "Key Peer");
+      const cookie = `${SESSION_COOKIE}=${createSession(db, "rec-key-user")}`;
+      const keyRes = await fetch(`${running.base}/api/keys`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json", cookie },
+        body: JSON.stringify({ label: "Mobile" }),
+      });
+      expect(keyRes.status).toBe(201);
+      const key = ((await keyRes.json()) as { key: string }).key;
+      expect(key).toMatch(/^odk_/);
+
+      // A future mobile client reuses the same surface with the bearer key.
+      const sent = await fetch(`${running.base}/api/recommendations`, {
+        method: "POST",
+        headers: {
+          origin: running.base,
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ recipientId: "rec-key-peer", videoId: "vid-key-1", title: "Api Song" }),
+      });
+      expect(sent.status).toBe(201);
+      const inbox = await fetch(`${running.base}/api/recommendations`, {
+        headers: { authorization: `Bearer ${key}` },
+      });
+      expect(inbox.status).toBe(200);
+
+      // Push subscription management refuses API keys (credential-adjacent).
+      const subscribe = await fetch(`${running.base}/api/push/subscribe`, {
+        method: "POST",
+        headers: {
+          origin: running.base,
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          endpoint: "https://push.example/key-sub",
+          keys: { p256dh: "a", auth: "b" },
+        }),
+      });
+      expect(subscribe.status).toBe(401);
+    });
+
+    it("manages Web Push subscriptions and serves a stable VAPID key", async () => {
+      seedUser(db, "push-user");
+      const cookie = `${SESSION_COOKIE}=${createSession(db, "push-user")}`;
+      const jsonHeaders = {
+        origin: running.base,
+        "content-type": "application/json",
+        cookie,
+      };
+
+      // The VAPID public key is generated once and stays stable.
+      const keyRes = await fetch(`${running.base}/api/push/vapid-public-key`, {
+        headers: { cookie },
+      });
+      expect(keyRes.status).toBe(200);
+      const { publicKey } = (await keyRes.json()) as { publicKey: string };
+      expect(publicKey.length).toBeGreaterThan(20);
+      const keyAgain = await fetch(`${running.base}/api/push/vapid-public-key`, {
+        headers: { cookie },
+      });
+      expect(((await keyAgain.json()) as { publicKey: string }).publicKey).toBe(publicKey);
+
+      // Subscribing stores the endpoint; incomplete bodies are refused.
+      const bad = await fetch(`${running.base}/api/push/subscribe`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ endpoint: "https://push.example/sub-1" }),
+      });
+      expect(bad.status).toBe(400);
+      const subscribe = await fetch(`${running.base}/api/push/subscribe`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          endpoint: "https://push.example/sub-1",
+          keys: { p256dh: "p256dh-key", auth: "auth-key" },
+        }),
+      });
+      expect(subscribe.status).toBe(201);
+      const row = db
+        .prepare("SELECT user_id FROM push_subscriptions WHERE endpoint = ?")
+        .get("https://push.example/sub-1") as { user_id: string } | undefined;
+      expect(row?.user_id).toBe("push-user");
+
+      // Unsubscribing removes only the caller's row.
+      const foreign = await fetch(`${running.base}/api/push/unsubscribe`, {
+        method: "POST",
+        headers: {
+          origin: running.base,
+          "content-type": "application/json",
+          cookie: `${SESSION_COOKIE}=${createSession(db, "rec-key-peer")}`,
+        },
+        body: JSON.stringify({ endpoint: "https://push.example/sub-1" }),
+      });
+      expect(await foreign.json()).toEqual({ ok: true, removed: false });
+      const unsubscribe = await fetch(`${running.base}/api/push/unsubscribe`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ endpoint: "https://push.example/sub-1" }),
+      });
+      expect(await unsubscribe.json()).toEqual({ ok: true, removed: true });
+    });
+  });
+
+  describe("API documentation page", () => {
+    it("renders docs/API.md as HTML at /docs", async () => {
+      const res = await fetch(`${running.base}/docs`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("html");
+      const html = await res.text();
+      expect(html).toContain("OpenDeck API");
+      // Structural proof the markdown renderer ran: tables and code blocks.
+      expect(html).toContain("<table>");
+      expect(html).toContain('class="code"');
+      expect(html).toContain('aria-label="API reference contents"');
+      // No inline scripts (the CSP blocks them; the page needs none).
+      expect(html).not.toContain("<script");
+    });
+  });
+
   describe("settings", () => {
     it("requires a session for every operation", async () => {
-      for (const route of ["get", "set", "remove", "clear"]) {
+      for (const route of ["get", "set", "remove"]) {
         const res = await fetch(`${running.base}/api/settings/${route}`, {
           method: "POST",
           headers: { "content-type": "application/json", origin: running.base },
@@ -724,6 +1324,14 @@ describe("Google Sign-In configuration and rate limiting", () => {
       });
       expect(first.status).toBe(503);
       expect(((await first.json()) as { error: string }).error).toContain("GOOGLE_CLIENT_ID");
+
+      // The QR handoff refuses to arm attempts without a provider too.
+      const qrStart = await fetch(`${running.base}/api/auth/google/qr/start`, {
+        method: "POST",
+        headers: { origin: running.base, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(qrStart.status).toBe(503);
 
       let last: Response | null = null;
       for (let attempt = 0; attempt < 20; attempt += 1) {

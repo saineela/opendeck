@@ -1,0 +1,34 @@
+# Secrets and local config must never enter the build context.
+.env
+.env.*
+client/.env.*
+server/.env.*
+
+# Dependencies and build output are (re)created inside the image.
+node_modules
+**/node_modules
+client/dist
+server/dist
+
+# Runtime data — SQLite lives on a volume, not in the image.
+.data
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Test tooling and artifacts.
+e2e
+test-results
+playwright-report
+**/*.test.ts
+
+# VCS / editor noise.
+.git
+.gitignore
+.freebuff
+*.log
+
+# Docker files themselves.
+Dockerfile
+docker-compose.yml
+.dockerignore

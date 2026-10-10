@@ -41,8 +41,8 @@ export function PlaylistDownloadButton({
       className={`${styles.button} ${busy ? styles.busy : ""} ${starting ? styles.starting : ""} ${complete ? styles.complete : ""}`}
       type="button"
       disabled={disabled || summary.total === 0 || complete}
-      aria-label={summary.paused ? "Resume playlist download" : busy ? "Pause playlist download" : "Download playlist"}
-      title={summary.paused ? "Resume download" : busy ? "Pause download" : complete ? "Downloaded" : "Download playlist"}
+      aria-label={summary.paused ? "Resume saving this playlist for offline play" : busy ? "Pause saving this playlist for offline play" : "Make this playlist available offline"}
+      title={summary.paused ? "Resume" : busy ? "Pause" : complete ? "Available offline" : "Make this playlist available offline"}
       onClick={async () => {
         if (busy || summary.paused) {
           togglePlaylistDownloads(tracks);

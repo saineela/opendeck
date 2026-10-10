@@ -39,7 +39,7 @@ export function DownloadsPopover() {
       <button
         type="button"
         className={`${styles.button} ${hasActivity ? styles.buttonActive : ""}`}
-        aria-label="Downloads"
+        aria-label="Offline audio"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
@@ -51,9 +51,9 @@ export function DownloadsPopover() {
       </button>
 
       {open && (
-        <section className={styles.panel} aria-label="Download queue">
+        <section className={styles.panel} aria-label="Offline queue">
           <header className={styles.panelHeader}>
-            <strong>Downloads</strong>
+            <strong>Offline audio</strong>
             {hasActivity && (
               <button
                 className={styles.panelAction}
@@ -72,7 +72,7 @@ export function DownloadsPopover() {
               </div>
             </div>
           ) : (
-            <p className={styles.empty}>No active download.</p>
+            <p className={styles.empty}>Nothing is being saved for offline play.</p>
           )}
           {queuedTracks.length > 0 && (
             <div className={styles.queue}>

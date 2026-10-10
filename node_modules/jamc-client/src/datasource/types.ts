@@ -47,7 +47,11 @@ export interface Playlist {
   title: string;
   owner: string;
   artworkUrl?: string;
-  kind?: "playlist" | "liked-songs" | "local";
+  /**
+   * `app` = this account's own playlist stored on the OpenDeck server
+   * (id prefix `pl-`), independent of any linked YouTube Music account.
+   */
+  kind?: "playlist" | "liked-songs" | "local" | "app";
   isSaved?: boolean;
   isEditable?: boolean;
   localPaths?: string[];

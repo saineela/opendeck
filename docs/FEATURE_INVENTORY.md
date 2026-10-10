@@ -37,8 +37,8 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 | 15 | Durable app settings | Rust `app_setting_*` | JSON file | Server SQLite per-user settings `/api/settings/*` + localStorage mirror (original dual-write pattern kept) | Rebuilt |
 | 16 | Stream URL resolution / quality (normal/high) | `resolveStream` client order + `audioQuality.ts` | InnerTube player | Reuse | Reuse |
 | 17 | Play reports (watchtime stats ping) | `beginPlayReport/updatePlayReport` | `pagestats` via proxy | Reuse (Bearer injected when signed in) | Reuse |
-| 18 | Downloads (downloader plugin: queue, progress, folder listing) | `downloaderStore` + Rust `download_audio_*` | googlevideo streams → disk | Rebuilt: backend `/api/media/download` streams bytes; browser download via object URL; popover keeps session progress | **Rebuilt** |
-| 19 | Last.fm (auth, now-playing, scrobble thresholds) | `LastFm.ts` logic + Rust `lastfm_*` (md5 api_sig) | ws.audioscrobbler.com | Logic kept in client; Rust commands ported to `/api/lastfm/*` (API key/secret in env), session stored per user | Rebuilt |
+| 18 | Downloads (downloader plugin: queue, progress, folder listing) | `downloaderStore` + Rust `download_audio_*` | googlevideo streams → disk | **Intentionally changed:** save-to-disk removed (browser apps must not hand audio to the OS download manager). Offline *playback* kept: the same store caches bytes in IndexedDB, a playlist-level "make available offline" button and per-track status badge remain, and the queue/progress popover was relabelled "Offline audio". | **Changed** |
+| 19 | Last.fm (auth, now-playing, scrobble thresholds) | `LastFm.ts` logic + Rust `lastfm_*` (md5 api_sig) | ws.audioscrobbler.com | **Removed entirely** in the web app: UI section, client service, server routes, `lastfm_sessions` table (dropped by migration), and env config all deleted. | **Removed** |
 | 20 | Discord RPC | Rust `discord_rpc_*` | Discord IPC (desktop only) | **Cannot be reproduced in a browser** (Discord Rich Presence requires local IPC). Settings section removed; documented. | N/A (documented) |
 | 21 | Media Session / OS media keys | `useMediaSession.ts` (browser Media Session API branch + Windows native branch) | navigator.mediaSession | Browser branch reused as-is; native branch unreachable (`isTauri()` false) | Reuse |
 | 22 | Synced lyrics view + lyrics button | `LyricsView`, `LyricsButton` | — | Reuse | Reuse |
@@ -65,10 +65,10 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 1. `/api/yt/proxy` — mirrors `proxy_http_request`: `{url, method, headers, body_base64, timeout_ms}` → `{status, headers, body_base64}`. Host allowlist; injects `Authorization: Bearer <YouTube OAuth access token>` for signed-in sessions with a linked YouTube account (replaces SAPISID cookie auth); automatic token refresh.
 2. Google OAuth 2.0 authorization-code + PKCE (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`), discovery against accounts.google.com; sessions in SQLite, httpOnly `SameSite=Lax` cookie, revocable.
 3. YouTube device-code OAuth (server-side, youtubei.js `OAuth2` endpoints at `youtube.com/o/oauth2/*`), tokens AES-256-GCM encrypted at rest keyed by `APP_SECRET`, per user.
-4. SQLite (`node:sqlite`): users, sessions, oauth tokens, cache entries (LRU + byte cap), durable settings, lastfm sessions.
+4. SQLite (`node:sqlite`): users, sessions, oauth tokens, cache entries (LRU + byte cap), durable settings, api keys.
 5. `/api/media/download` — resolve + stream audio bytes (Range-capable) for the downloader plugin.
-6. `/api/lastfm/*` — port of Rust Last.fm endpoints (md5 api_sig), credentials in env.
-7. `/api/cache/*`, `/api/settings/*` — ports of Rust cache/app-setting commands.
+6. `/api/cache/*`, `/api/settings/*` — ports of Rust cache/app-setting commands.
+7. `/api/keys` — per-account API keys (Bearer `odk_…`), SHA-256-hashed at rest; management requires a browser session.
 
 ## Explicitly not reproducible on the web (documented in README)
 

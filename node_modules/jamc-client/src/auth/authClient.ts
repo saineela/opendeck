@@ -5,12 +5,13 @@ import { setSettingsRemoteAvailability } from "../internal/appSettings";
 /**
  * Google Sign-In state for the web app.
  *
- * The flow: `signInWithGoogle` opens our backend's `/api/auth/google/start`
- * in a popup, which redirects through Google's OAuth consent screen and comes
- * back to `/api/auth/google/callback`. The callback page postMessages the
- * opener and closes itself; we also poll the session endpoint as a fallback
- * (popup blockers, mobile browsers). Tokens and the session cookie live
- * exclusively on the server.
+ * The flow is a cross-device QR handoff: `startGoogleQrSignIn` creates a
+ * short-lived attempt on our backend and the login page renders its link as
+ * a QR code. The phone scans it and runs Google's consent; the callback marks
+ * the attempt complete (the phone never receives a session). Back on the
+ * desktop, the user presses Verify — `verifyGoogleQrSignIn` claims the
+ * completed attempt and this browser receives the session cookie. Tokens and
+ * the session cookie live exclusively on the server.
  */
 
 export interface AuthUser {
@@ -23,14 +24,41 @@ export interface AuthSession {
   authenticated: boolean;
   user: AuthUser | null;
   youtubeLinked: boolean;
+  /** True when the signed-in account has TOTP second-factor enabled. */
+  totpEnabled: boolean;
+  /** "password" | "google" — which credential opened this session. */
+  authProvider: string | null;
+  /** Whether this server allows email + password accounts at all. */
+  passwordLoginEnabled: boolean;
+  registrationEnabled: boolean;
+  /** Whether a Google OAuth client is configured on this server. */
+  googleSignInEnabled: boolean;
+  /** Whether sign-up requires an invite code. */
+  inviteCodeRequired: boolean;
+  /** Role of the signed-in account; null when signed out. */
+  role: "admin" | "user" | null;
+  /** True while the instance has no accounts — show first-run setup. */
+  needsSetup: boolean;
+  /** Display name + availability of the configured OIDC provider. */
+  oauthProvider: { name: string; configured: boolean };
 }
 
 export type AuthStatus = "loading" | "signed-out" | "signed-in";
 
-const SIGNED_OUT: AuthSession = { authenticated: false, user: null, youtubeLinked: false };
-
-const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
-const POLL_INTERVAL_MS = 1500;
+const SIGNED_OUT: AuthSession = {
+  authenticated: false,
+  user: null,
+  youtubeLinked: false,
+  totpEnabled: false,
+  authProvider: null,
+  passwordLoginEnabled: true,
+  registrationEnabled: true,
+  googleSignInEnabled: false,
+  inviteCodeRequired: false,
+  role: null,
+  needsSetup: false,
+  oauthProvider: { name: "Google", configured: false },
+};
 
 let session: AuthSession = SIGNED_OUT;
 let status: AuthStatus = "loading";
@@ -85,11 +113,23 @@ export async function refreshAuthSession(): Promise<AuthSession> {
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error(`Session check failed with HTTP ${response.status}.`);
-      const payload = (await response.json()) as AuthSession;
+      const payload = (await response.json()) as Partial<AuthSession>;
       session = {
         authenticated: Boolean(payload.authenticated),
         user: payload.user ?? null,
         youtubeLinked: Boolean(payload.youtubeLinked),
+        totpEnabled: Boolean(payload.totpEnabled),
+        authProvider: payload.authProvider ?? null,
+        passwordLoginEnabled: payload.passwordLoginEnabled !== false,
+        registrationEnabled: payload.registrationEnabled !== false,
+        googleSignInEnabled: Boolean(payload.googleSignInEnabled),
+        inviteCodeRequired: Boolean(payload.inviteCodeRequired),
+        role: payload.role === "admin" || payload.role === "user" ? payload.role : null,
+        needsSetup: Boolean(payload.needsSetup),
+        oauthProvider: {
+          name: payload.oauthProvider?.name || "Google",
+          configured: Boolean(payload.oauthProvider?.configured),
+        },
       };
       status = session.authenticated ? "signed-in" : "signed-out";
     setSettingsRemoteAvailability(session.authenticated);
@@ -116,66 +156,38 @@ export function applyAuthSession(next: AuthSession): void {
   emit();
 }
 
-function waitForAuthMessage(timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      window.removeEventListener("message", onMessage);
-      reject(new Error("Google sign-in timed out."));
-    }, timeoutMs);
+/* ----------------------------------------------------------------------
+ * Cross-device Google sign-in (QR handoff).
+ * -------------------------------------------------------------------- */
 
-    function onMessage(event: MessageEvent): void {
-      if (event.origin !== window.location.origin) return;
-      const data = event.data as { jamcAuth?: boolean; ok?: boolean } | null;
-      if (!data || data.jamcAuth !== true) return;
-      window.clearTimeout(timeoutId);
-      window.removeEventListener("message", onMessage);
-      if (data.ok === false) {
-        reject(new Error("Google sign-in was cancelled or failed."));
-      } else {
-        resolve();
-      }
-    }
-
-    window.addEventListener("message", onMessage);
-  });
+export interface GoogleQrSignIn {
+  attemptId: string;
+  /** Encode this link as a QR code; the phone opens it to run the consent. */
+  qrUrl: string;
+  expiresInSec: number;
 }
 
-async function pollUntilAuthenticated(deadline: number): Promise<void> {
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
-    const latest = await refreshAuthSession();
-    if (latest.authenticated) return;
-  }
-  throw new Error("Google sign-in timed out.");
+export type GoogleQrVerifyResult =
+  | { status: "pending" }
+  | { status: "verified"; user: AuthUser };
+
+/** Creates a sign-in attempt; render `qrUrl` as a QR code on the desktop. */
+export function startGoogleQrSignIn(): Promise<GoogleQrSignIn> {
+  return postJson<GoogleQrSignIn>("/api/auth/google/qr/start", {});
 }
 
 /**
- * Runs the Google OAuth popup flow and resolves once the session exists.
- * Falls back to a full-page redirect when popups are blocked.
+ * The Verify button. Claims the attempt once the phone has finished the
+ * consent — on success this browser receives the session cookie.
  */
-export async function signInWithGoogle(): Promise<AuthSession> {
-  const startUrl = `/api/auth/google/start?returnTo=${encodeURIComponent(
-    window.location.pathname + window.location.search,
-  )}`;
-  const popup = window.open(startUrl, "jamc-google-signin", "width=520,height=640");
-
-  if (!popup) {
-    // Popup blocked — fall back to a top-level redirect. The callback page
-    // redirects back here after sign-in completes.
-    window.location.assign(startUrl);
-    return session;
-  }
-
-  const deadline = Date.now() + SIGN_IN_TIMEOUT_MS;
-  try {
-    await Promise.race([
-      waitForAuthMessage(Math.max(1000, deadline - Date.now())),
-      pollUntilAuthenticated(deadline),
-    ]);
-  } finally {
-    if (!popup.closed) popup.close();
-  }
-  return refreshAuthSession();
+export async function verifyGoogleQrSignIn(
+  attemptId: string,
+): Promise<GoogleQrVerifyResult> {
+  const result = await postJson<GoogleQrVerifyResult>("/api/auth/google/qr/verify", {
+    attemptId,
+  });
+  if (result.status === "verified") await refreshAuthSession();
+  return result;
 }
 
 export async function signOut(): Promise<void> {
@@ -192,6 +204,109 @@ export async function signOut(): Promise<void> {
   } finally {
     applyAuthSession(SIGNED_OUT);
   }
+}
+
+/* ----------------------------------------------------------------------
+ * Local accounts: email + password, with an optional TOTP second factor.
+ * -------------------------------------------------------------------- */
+
+export interface TotpChallenge {
+  status: "totp_required";
+  challenge: string;
+  expiresInSeconds: number;
+}
+
+export interface TotpStatus {
+  enabled: boolean;
+  enrolled: boolean;
+  backupCodesRemaining: number;
+}
+
+export interface TotpSetup {
+  secret: string;
+  otpauthUri: string;
+  issuer: string;
+  digits: number;
+  periodSeconds: number;
+}
+
+export interface PasswordLoginResult {
+  status: "ok" | "totp_required";
+  challenge?: string;
+  expiresInSeconds?: number;
+}
+
+async function postJson<T>(pathname: string, body: unknown): Promise<T> {
+  const response = await fetch(pathname, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+    credentials: "same-origin",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | (T & { error?: string })
+    | { error?: string }
+    | null;
+  if (!response.ok) {
+    throw new Error((payload as { error?: string } | null)?.error ?? `Request failed with HTTP ${response.status}.`);
+  }
+  return payload as T;
+}
+
+export function registerAccount(input: {
+  email: string;
+  password: string;
+  name?: string;
+  inviteCode?: string;
+}): Promise<{ ok: boolean; user: AuthUser }> {
+  return postJson("/api/auth/register", input);
+}
+
+/**
+ * Password sign-in. Resolves `totp_required` when the account has a second
+ * factor — pass the returned challenge to `completeTotpLogin`.
+ */
+export async function signInWithPassword(input: {
+  email: string;
+  password: string;
+}): Promise<PasswordLoginResult> {
+  const result = await postJson<PasswordLoginResult>("/api/auth/login", input);
+  if (result.status === "ok") await refreshAuthSession();
+  return result;
+}
+
+export async function completeTotpLogin(input: {
+  challenge: string;
+  code: string;
+}): Promise<PasswordLoginResult> {
+  const result = await postJson<PasswordLoginResult>("/api/auth/login/totp", input);
+  await refreshAuthSession();
+  return result;
+}
+
+export async function getTotpStatus(): Promise<TotpStatus> {
+  const response = await fetch("/api/auth/totp/status", {
+    headers: { accept: "application/json" },
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "Unable to load two-step status.");
+  return (await response.json()) as TotpStatus;
+}
+
+export function setupTotp(): Promise<TotpSetup> {
+  return postJson<TotpSetup>("/api/auth/totp/setup", {});
+}
+
+export async function enableTotp(code: string): Promise<{ enabled: boolean; backupCodes: string[] }> {
+  const result = await postJson<{ enabled: boolean; backupCodes: string[] }>("/api/auth/totp/enable", { code });
+  await refreshAuthSession();
+  return result;
+}
+
+export async function disableTotp(input: { password: string; code: string }): Promise<{ enabled: boolean }> {
+  const result = await postJson<{ enabled: boolean }>("/api/auth/totp/disable", input);
+  await refreshAuthSession();
+  return result;
 }
 
 /* ----------------------------------------------------------------------

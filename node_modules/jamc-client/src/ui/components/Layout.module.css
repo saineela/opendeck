@@ -27,7 +27,10 @@
 
 :global(html[data-app-theme="light"]) .starField,
 :global(html[data-app-theme="glass"]) .starField,
-:global(html[data-app-theme="matrix"]) .starField {
+:global(html[data-app-theme="matrix"]) .starField,
+:global(html[data-app-theme="sakura"]) .starField,
+:global(html[data-app-theme="ghibli"]) .starField,
+:global(html[data-app-theme="nordic"]) .starField {
   display: none;
 }
 

@@ -2,8 +2,11 @@ import { useState, useRef, useEffect, useMemo, useSyncExternalStore } from "reac
 import {
   IconDisc,
   IconFolder,
+  IconGift,
   IconHeart,
+  IconHistory,
   IconPlaylist,
+  IconPlus,
   IconRefresh,
 } from "@tabler/icons-react";
 import type { Album, Playlist } from "../../datasource/types";
@@ -98,6 +101,12 @@ interface SidebarProps {
   onWidthChange: (width: number) => void;
   onNavigateAlbum: (album: Album) => void;
   onNavigatePlaylist: (playlist: Playlist) => void;
+  /** Opens the account dialog when there is no signed-in user yet. */
+  onSignIn?: () => void;
+  /** Opens the Music History tab. */
+  onOpenHistory?: () => void;
+  /** Opens the Recommendations tab. */
+  onOpenRecommendations?: () => void;
 }
 
 const MIN_WIDTH = 85;
@@ -159,10 +168,16 @@ export function Sidebar({
   onWidthChange,
   onNavigateAlbum,
   onNavigatePlaylist,
+  onSignIn,
+  onOpenHistory,
+  onOpenRecommendations,
 }: SidebarProps) {
   const libraryState = useLibraryState();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
   const [libraryView, setLibraryView] = useState<LibraryView>("playlists");
+  const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
+  const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [playlistError, setPlaylistError] = useState<string | null>(null);
   const [recentPlaylistsRevision, setRecentPlaylistsRevision] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [playlistOrder, setPlaylistOrder] = useState<string[]>(() =>
@@ -643,6 +658,34 @@ export function Sidebar({
     void libraryController.refresh();
   };
 
+  const handleStartCreatePlaylist = () => {
+    if (libraryState.status === "signed-out" || !libraryState.library) {
+      setPlaylistError("Sign in first — playlists are stored on this server.");
+      return;
+    }
+    setPlaylistError(null);
+    setNewPlaylistName("");
+    setIsCreatingPlaylist(true);
+    setLibraryView("playlists");
+  };
+
+  const handleCreatePlaylist = async () => {
+    const name = newPlaylistName.trim();
+    if (!name) {
+      setIsCreatingPlaylist(false);
+      return;
+    }
+    try {
+      const playlist = await libraryController.createPlaylist(name);
+      setIsCreatingPlaylist(false);
+      setNewPlaylistName("");
+      setPlaylistError(null);
+      onNavigatePlaylist(playlist);
+    } catch (error) {
+      setPlaylistError(error instanceof Error ? error.message : "Unable to create the playlist.");
+    }
+  };
+
   const isDragActive = Boolean(draggedItem);
 
   const listClasses = `${styles.albumList} ${isDragActive ? styles.dragActive : ""}`;
@@ -707,7 +750,69 @@ export function Sidebar({
             <IconDisc size={17} aria-hidden="true" />
             {!shouldHideText && <span>Albums</span>}
           </button>
+          <button
+            type="button"
+            className={styles.toggleButton}
+            title="Music history"
+            aria-label="Music history"
+            onClick={() => onOpenHistory?.()}
+          >
+            <IconHistory size={17} aria-hidden="true" />
+            {!shouldHideText && <span>History</span>}
+          </button>
+          <button
+            type="button"
+            className={styles.toggleButton}
+            title="Song recommendations"
+            aria-label="Song recommendations"
+            onClick={() => onOpenRecommendations?.()}
+          >
+            <IconGift size={17} aria-hidden="true" />
+            {!shouldHideText && <span>For you</span>}
+          </button>
+          <button
+            type="button"
+            className={`${styles.toggleButton} ${styles.newPlaylistButton}`}
+            title="New playlist"
+            aria-label="New playlist"
+            aria-expanded={isCreatingPlaylist}
+            onClick={handleStartCreatePlaylist}
+          >
+            <IconPlus size={17} aria-hidden="true" />
+          </button>
         </div>
+        {isCreatingPlaylist && (
+          <form
+            className={styles.newPlaylistRow}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleCreatePlaylist();
+            }}
+          >
+            <input
+              autoFocus
+              value={newPlaylistName}
+              placeholder="Playlist name"
+              aria-label="Playlist name"
+              maxLength={120}
+              onChange={(event) => setNewPlaylistName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setIsCreatingPlaylist(false);
+              }}
+              onBlur={() => {
+                if (!newPlaylistName.trim()) setIsCreatingPlaylist(false);
+              }}
+            />
+            <button type="submit" title="Create playlist" aria-label="Create playlist">
+              <IconPlus size={16} aria-hidden="true" />
+            </button>
+          </form>
+        )}
+        {playlistError && (
+          <p className={styles.newPlaylistError} role="alert">
+            {playlistError}
+          </p>
+        )}
         <div ref={listRef} className={listClasses}>
           {libraryView === "albums" ? (
             albums.map((album) => (
@@ -807,8 +912,8 @@ export function Sidebar({
                   <button
                     type="button"
                     className={styles.librarySignInButton}
-                    onClick={() => void libraryController.signIn()}
-                    title="Sign in to YouTube Music"
+                    onClick={() => (onSignIn ? onSignIn() : void libraryController.signIn())}
+                    title="Sign in to your account"
                   >
                     Sign in
                   </button>
