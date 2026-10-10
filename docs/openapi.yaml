@@ -41,6 +41,7 @@ tags:
   - name: Proxy
   - name: Media
   - name: Cache
+  - name: Artwork
   - name: Settings
   - name: ApiKeys
   - name: History
@@ -1324,6 +1325,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/artwork:
+    get:
+      tags: [Artwork]
+      operationId: getArtwork
+      summary: Serve a cached artwork image (public)
+      description: |
+        Album art, track thumbnails and channel avatars. The client points
+        every `<img>` here instead of at YouTube, so a picture is fetched from
+        the origin once per instance rather than once per browser session, and
+        survives a device switch.
+
+        Public by design (artwork is public content), which is why the host
+        policy is narrower than `/api/yt/proxy`: only ytimg and
+        googleusercontent/ggpht artwork origins are accepted. The body is
+        stored as a BLOB and returned verbatim; concurrent misses on the same
+        URL are coalesced into a single origin fetch, and a failed fetch is
+        not retried for five seconds.
+
+        When the byte budget set by an administrator is reached, the
+        least-played artwork is evicted first (see
+        `POST /api/cache/artwork/setMaxBytes`). Rate limit 6000/min.
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          description: Absolute https URL of the artwork on an allowlisted host.
+          schema: { type: string, maxLength: 8192 }
+      responses:
+        "200":
+          description: Image bytes
+          headers:
+            ETag: { description: "\"<sha256 of the url>\"" }
+            Cache-Control: { description: "public, max-age=2592000, immutable" }
+          content:
+            image/*: {}
+        "304":
+          description: Validator matched — the picture is unchanged
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: Host is not on the artwork allowlist, or the URL is not https
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: The URL answered with a non-image content type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The artwork origin failed, timed out, or was throttled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
   /api/cache/get:
     post:
       tags: [Cache]
@@ -1439,6 +1496,83 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CacheStats" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/stats:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheStats
+      summary: Artwork cache usage (session required)
+      description: The cache is shared by every account, so the numbers are instance-wide.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/setMaxBytes:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheSetMaxBytes
+      summary: Resize the artwork budget (admin only)
+      description: |
+        The cache is global, so the budget is administered globally: 401 for
+        anonymous callers and 403 for signed-in non-administrators. The value
+        is clamped to 64 MB – 64 GB, and the cache trims immediately when it
+        is lowered below current usage.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxBytes]
+              properties:
+                maxBytes: { type: number, exclusiveMinimum: 0, example: 536870912 }
+      responses:
+        "200":
+          description: Stats after re-trimming
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/format:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheFormat
+      summary: "'Format' the artwork cache — drop every picture (admin only)"
+      description: |
+        Empties the cache and VACUUMs, so the disk space is returned rather
+        than held on SQLite's free list. Everything is re-fetched on demand.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats after formatting (always empty)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   /api/settings/get:
@@ -1949,13 +2083,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [users, admins, sessions, apiKeys, cacheEntries, settings]
+                required: [users, admins, sessions, apiKeys, cacheEntries, imageCacheBytes, settings]
                 properties:
                   users: { type: integer }
                   admins: { type: integer }
                   sessions: { type: integer }
                   apiKeys: { type: integer }
                   cacheEntries: { type: integer }
+                  imageCacheBytes:
+                    type: integer
+                    description: Bytes held by the shared artwork cache
                   settings: { type: integer }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
@@ -2265,6 +2402,57 @@ paths:
                 properties:
                   registration: { $ref: "#/components/schemas/AdminRegistration" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/image-cache:
+    get:
+      tags: [Artwork, Admin]
+      operationId: adminImageCache
+      summary: Artwork cache report — usage plus the biggest occupants (admin only)
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Cache stats and the 25 largest pictures, largest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stats, images]
+                properties:
+                  stats: { $ref: "#/components/schemas/ImageCacheStats" }
+                  images:
+                    type: array
+                    items: { $ref: "#/components/schemas/CachedArtworkEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/image-cache/format:
+    post:
+      tags: [Artwork, Admin]
+      operationId: adminImageCacheFormat
+      summary: Format the artwork cache — drop every picture and reclaim the disk (admin only)
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Always-empty stats after formatting
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, stats]
+                properties:
+                  ok: { type: boolean, const: true }
+                  stats: { $ref: "#/components/schemas/ImageCacheStats" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "429": { $ref: "#/components/responses/RateLimited" }
@@ -2588,6 +2776,38 @@ components:
         maxBytes: { type: number, description: "Byte budget (default 536870912)" }
         usedBytes: { type: number }
         entryCount: { type: integer }
+
+    ImageCacheStats:
+      type: object
+      required: [maxBytes, usedBytes, entryCount, usageRatio]
+      properties:
+        maxBytes:
+          type: number
+          description: "Byte budget (default 536870912, clamped to 64 MB – 64 GB)"
+        usedBytes: { type: number }
+        entryCount: { type: integer, description: "Cached pictures" }
+        usageRatio:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Fraction of the budget in use — what the settings meter renders.
+
+    CachedArtworkEntry:
+      type: object
+      required: [hash, url, contentType, bytes, createdAt, lastUsed, hitCount, playCount]
+      properties:
+        hash: { type: string, description: "SHA-256 of the source URL — the cache key" }
+        url: { type: string }
+        contentType: { type: string, example: image/jpeg }
+        bytes: { type: integer }
+        createdAt: { type: integer, format: int64 }
+        lastUsed: { type: integer, format: int64 }
+        hitCount:
+          type: integer
+          description: Times served (sampled — updated at most once per 30 s)
+        playCount:
+          type: integer
+          description: Times any account played the track this picture belongs to.
 
     ApiKeyInfo:
       type: object

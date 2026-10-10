@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { IconArrowsShuffle, IconMusic } from "@tabler/icons-react";
 import type { Track } from "../../datasource/types";
+import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import styles from "./DiceCard.module.css";
 
 interface DiceCardProps {
@@ -35,7 +36,7 @@ export function DiceCard({ tracks, isSpinning = false, onClick }: DiceCardProps)
           <img
             key={`${preview.id}-${previewIndex}`}
             className={`${styles.artwork} ${isSpinning ? styles.spinning : ""}`}
-            src={preview.artworkUrl}
+            src={toCachedArtworkUrl(preview.artworkUrl)}
             alt=""
           />
         ) : (

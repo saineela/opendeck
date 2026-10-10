@@ -148,3 +148,35 @@ export function setRegistrationEnabled(db: Db, enabled: boolean): void {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   ).run(REGISTRATION_KEY, enabled ? "1" : "0", Date.now());
 }
+
+/* ---------------------------------------------------------------------- *
+ * Instance theme — the admin's default look, served to everyone who has
+ * not picked their own. The sign-in page has no signed-in user, so it can
+ * only ever show this one; a personal override in app settings wins for
+ * that account inside the app.
+ * ---------------------------------------------------------------------- */
+
+const INSTANCE_THEME_KEY = "theme.instance";
+
+/** Themes the client knows about; the server only stores a string. */
+export const KNOWN_INSTANCE_THEMES = new Set([
+  "dark", "light", "glass", "matrix", "sakura", "tokyo",
+  "ghibli", "cel", "sunset", "ocean", "nordic",
+]);
+
+/** Effective instance theme, or null when none is set (client default). */
+export function getInstanceTheme(db: Db): string | null {
+  const row = db
+    .prepare("SELECT value FROM instance_config WHERE key = ?")
+    .get(INSTANCE_THEME_KEY) as { value: string } | undefined;
+  if (!row) return null;
+  return KNOWN_INSTANCE_THEMES.has(row.value) ? row.value : null;
+}
+
+/** Persists the admin's instance theme. */
+export function setInstanceTheme(db: Db, theme: string): void {
+  db.prepare(
+    `INSERT INTO instance_config (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).run(INSTANCE_THEME_KEY, theme, Date.now());
+}

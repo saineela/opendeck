@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IconDisc, IconMusic, IconPlaylist, IconUser } from "@tabler/icons-react";
-import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
-import { tauriFetch } from "../../datasource/youtube/tauriFetch";
+import { getArtworkUrlCandidates, toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import styles from "./TrackArtwork.module.css";
 
 const ARTWORK_RETRY_DELAYS_MS = [500, 1500];
@@ -42,9 +41,12 @@ export function TrackArtwork({
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
   const [loadedArtworkUrl, setLoadedArtworkUrl] = useState<string | null>(null);
   const retryTimerRef = useRef<number | null>(null);
+  // Retries are appended to the *upstream* URL before caching, so a retry
+  // miss produces a different cache key and genuinely re-fetches from the
+  // origin instead of replaying a bad entry.
   const baseArtworkUrl = artworkCandidates[artworkIndex] ?? proxiedArtworkUrl;
   const currentArtworkUrl = baseArtworkUrl
-    ? getRetriedArtworkUrl(baseArtworkUrl, retryCount)
+    ? toCachedArtworkUrl(getRetriedArtworkUrl(baseArtworkUrl, retryCount))
     : undefined;
   const isArtworkLoaded = loadedArtworkUrl === currentArtworkUrl;
   const FallbackIcon =
@@ -74,34 +76,14 @@ export function TrackArtwork({
     setLoadedArtworkUrl(null);
   }, [baseArtworkUrl]);
 
+  // Last resort once every size variant has failed: ask the server's cache
+  // for the raw URL. This used to be a round trip through the JSON proxy
+  // that turned the bytes into base64 and then into an object URL; the image
+  // cache route serves the same bytes as a normal <img> response, so the
+  // browser can cache them too.
   useEffect(() => {
     if (!artworkUrl || artworkIndex < artworkCandidates.length || proxiedArtworkUrl) return;
-
-    let objectUrl: string | null = null;
-    let active = true;
-
-    void tauriFetch(artworkUrl, {
-      headers: {
-        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-      },
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Artwork request failed with HTTP ${response.status}.`);
-        return response.blob();
-      })
-      .then((blob) => {
-        objectUrl = URL.createObjectURL(blob);
-        if (active) setProxiedArtworkUrl(objectUrl);
-        else URL.revokeObjectURL(objectUrl);
-      })
-      .catch(() => {
-        if (active) setProxiedArtworkUrl(null);
-      });
-
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
+    setProxiedArtworkUrl(toCachedArtworkUrl(artworkUrl));
   }, [artworkCandidates.length, artworkIndex, artworkUrl, proxiedArtworkUrl]);
 
   return (

@@ -1,4 +1,4 @@
-import appIcon from "../../../assets/img/opendeck.svg";
+import appIcon from "../../../assets/img/opendeck-logo.png";
 import styles from "./AppLoadingScreen.module.css";
 
 const LOADING_LINES = [
