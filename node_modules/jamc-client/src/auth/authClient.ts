@@ -353,6 +353,58 @@ export function startYouTubeLink(): Promise<YouTubeLinkStatus> {
   return postYouTube("link");
 }
 
+/**
+ * The linked account's YouTube Music library, normalised server-side.
+ *
+ * The browser cannot read its own library: an OAuth token is rejected by the
+ * WEB_REMIX client a browser sends (400), so the server performs the read with
+ * TVHTML5 and returns plain JSON. Throws 409 when nothing is linked yet.
+ */
+export interface YouTubeLibraryPayload {
+  account: { name: string | null };
+  playlists: Array<{
+    id: string;
+    title: string;
+    owner: string;
+    artworkUrl?: string;
+    trackCount?: number;
+  }>;
+  likedSongs: Array<{
+    id: string;
+    title: string;
+    artist: string;
+    artworkUrl?: string;
+    durationSec?: number;
+  }>;
+  albums: Array<{
+    id: string;
+    title: string;
+    artist: string;
+    artworkUrl?: string;
+  }>;
+  recentlyPlayed: Array<{
+    id: string;
+    title: string;
+    artist: string;
+    artworkUrl?: string;
+    durationSec?: number;
+  }>;
+}
+
+export async function fetchYouTubeLibrary(): Promise<YouTubeLibraryPayload> {
+  const response = await fetch("/api/youtube/library", {
+    headers: { accept: "application/json" },
+    credentials: "same-origin",
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | (YouTubeLibraryPayload & { error?: string })
+    | null;
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `YouTube library request failed with HTTP ${response.status}.`);
+  }
+  return payload as YouTubeLibraryPayload;
+}
+
 export function cancelYouTubeLink(): Promise<YouTubeLinkStatus> {
   return postYouTube("cancel");
 }

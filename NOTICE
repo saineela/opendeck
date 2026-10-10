@@ -24,8 +24,11 @@ Modifications made in this project include, without limitation:
   * replacement of the Tauri desktop shell with a Node.js/Express server
   * multi-user accounts, email/password sign-in, and TOTP second factors
   * server-side per-user library storage (playlists and liked songs)
+  * song recommendations between registered accounts, with Web Push delivery
+    and a documented bearer-key-compatible HTTP API
   * a light-first interface theme
   * removal of the save-to-disk download feature
+  * removal of the Last.fm integration
   * Docker packaging and API documentation
 
 See README.md ("Credits and license") for the full attribution statement.

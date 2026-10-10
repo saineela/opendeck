@@ -89,6 +89,79 @@ permits this kind of modification and redistribution.
 
 ---
 
+## OpenDeck vs JustAnotherMusicClient
+
+OpenDeck started as a faithful web port of
+[2latemc/JustAnotherMusicClient](https://github.com/2latemc/JustAnotherMusicClient)
+(**JAMC**) — a Tauri (Rust) + React desktop app. Everything JAMC does well was
+brought across nearly unchanged; what changed, changed because a browser and a
+shared server are not a desktop app with a private profile. Full per-feature
+provenance is in [docs/FEATURE_INVENTORY.md](docs/FEATURE_INVENTORY.md).
+
+### Same as JAMC (carried over)
+
+| Area | What you get — identical behaviour to JAMC |
+|---|---|
+| Playback | Play/pause, seek, volume, next/prev, shuffle, repeat, autoplay radio, queue with drag reorder + play-next |
+| Multiple tabs | Each tab has its own queue, volume, and player state; state survives reload |
+| Search | Tracks, artists, albums, playlists, live suggestions; Ctrl+K search overlay |
+| Browse | Home shelves, artist pages (popular/albums/subscribe), album pages, playlist pages, liked songs |
+| Library actions | Like/unlike, save/unsave albums & playlists, add/remove/reorder playlist tracks, Ctrl+S context menus |
+| Lyrics | Real-time synced lyrics via LRCLIB, BetterLyrics, YouTube transcripts |
+| Recommendations feed | Home-tab personalized suggestions + the **MagicDice** shuffle wheel |
+| Caching | LRU cache with size cap, stats, and clear (moved server-side, same semantics) |
+| Streaming | youtubei.js InnerTube, po-token/BotGuard attestation, normal/high quality selection, play reporting |
+| Offline | Tracks cached for playback without a connection |
+| Themes | Theme picker + custom CSS override |
+| Media keys | Media Session API (OS media keys, lock-screen controls) |
+| Local files | Local-folder playlists and playback |
+| Settings | Durable settings that follow the account, keyboard-shortcut editor, onboarding flow |
+| Sign-out | Revokes the YouTube session, deletes tokens, clears cache |
+
+### New in OpenDeck (not in JAMC)
+
+| Feature | What it does |
+|---|---|
+| **Multi-user accounts** | Any number of users on one host; playlists, likes, settings, cache, history, and YouTube link are scoped to the owner |
+| **Email + password sign-in** | Runs with zero third-party credentials — no Google OAuth client or YouTube account needed to start |
+| **TOTP two-step verification** | RFC 6238 + single-use backup codes; removing it needs password + live code |
+| **Any OIDC provider sign-in** | Google, Keycloak, Authentik, … via authorization-code + PKCE, configurable in the admin panel |
+| **Admin panel** | Create users, change roles, revoke sessions, reset a stuck 2FA, close/reopen registration, TOTP-gated instance reset |
+| **Per-account API keys** | `odk_…` bearer tokens (SHA-256 at rest) for scripted access, with per-key play statistics |
+| **Song recommendations between people** | Right-click a track → **Recommend to…** → pick a registered user; it lands in their Recommendations tab with a note, and a **Web Push** notification fires even when the app is closed |
+| **Web Push (VAPID)** | Server-side push subscriptions, per device, for recommendation notifications |
+| **Documented REST API** | [docs/API.md](docs/API.md), a rendered `/docs` page, and `docs/openapi.yaml` — session cookie *or* bearer key, so a future mobile client can reuse it |
+| **Play history + statistics** | Server-side listening history for app and API plays, attributed to the API key |
+| **Server-side library** | Playlists and liked songs stored in SQLite — they follow the account to any browser, and survive cleared browser data |
+| **QR cross-device sign-in** | Phone completes the consent, desktop claims the session |
+| **Container packaging** | Dockerfile + compose, health-check, single named volume for SQLite |
+| **YouTube library on the web** | `GET /api/youtube/library` — an OAuth device-code token only works with InnerTube's TVHTML5 client, so the server does the round trip and normalizes it (WEB_REMIX rejects OAuth) |
+| **Light-first theming** | Opens in Daylight; 12 themes including Sakura, Neon Tokyo, Ghibli, Cel Shade, Terminal |
+| **Independent HTTP surface** | `/api/yt/proxy` (allowlisted InnerTube proxy with Bearer injection), `/api/media/stream` (Range-capable audio), `/api/feed/*`, `/api/cache/*`, `/api/settings/*` |
+| **Hardening** | Account lockout, per-IP rate limits, CSRF origin checks, helmet headers, constant-time comparisons, no route accepts a user id |
+| **Tests** | 191 server + 39 client unit/integration tests and a Playwright E2E suite with a fake OIDC provider |
+
+### Different from JAMC
+
+| Area | JAMC (desktop) | OpenDeck (web) | Why |
+|---|---|---|---|
+| Shell | Tauri 2 (Rust), native window, tray, autostart, mini-player window | Browser tab; server serves the SPA | A web app has no OS window |
+| YouTube sign-in | Native webview polls SAPISID cookies, OS-keychain encrypted | Google OAuth (code + PKCE) for the account, **device-code** flow for YouTube; tokens AES-256-GCM on the server | Browsers can't read cookies cross-origin; the browser must never hold tokens |
+| Upstream traffic | Rust `proxy_http_request` with a cookie jar | `POST /api/yt/proxy`, host-allowlisted, injects `Authorization: Bearer` | CORS + a single choke point |
+| Cache / settings | Rust disk LRU + JSON files | SQLite LRU with byte cap, per-user namespace | Shared server, per-account isolation |
+| Local files | Full filesystem scan via Rust | File System Access API directory picker (plus `<input type=file>` fallback) | Browser sandbox |
+| Custom CSS | Filesystem read/write | Theme picker + custom CSS stored in settings | Browser sandbox |
+| Logging | Rust log file + in-app viewer | Server logs + browser console (devtools) | Platform equivalent |
+| Mini player, tray, window chrome, updater, release modal | Present | Removed — Media Session API covers OS media keys | Not reproducible in a browser |
+| Save-to-disk download | Downloader plugin writes audio files | **Removed on purpose** — offline caching stays in app-managed storage, never handed to the browser download manager | A browser must not hand audio to the OS download manager |
+| Last.fm scrobbling | Full Last.fm integration | **Removed** (routes, table, and UI deleted) | Deliberate scope decision |
+| Discord RPC | Rich Presence over local IPC | **Not possible in a browser** | Requires local Discord IPC |
+
+**In short:** same music player, same feel — plus accounts, 2FA, an admin
+panel, an open API, push-enabled recommendations between people, and Docker.
+
+---
+
 ## Quick start — Docker Compose
 
 ```bash
@@ -259,7 +332,7 @@ Mutations are protected by a same-origin check (rejects cross-site `Origin` /
 ## Testing
 
 ```bash
-npm test          # server (127) + client (39) unit & integration tests
+npm test          # server (191) + client (39) unit & integration tests
 npm run test:e2e  # Playwright end-to-end suite
 npm run test:all  # both
 ```

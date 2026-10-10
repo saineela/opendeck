@@ -113,6 +113,47 @@ function needsBearerAuth(url: URL): boolean {
   );
 }
 
+/**
+ * InnerTube clients that **reject** an OAuth Bearer token outright.
+ *
+ * The whole WEB family answers `400 Request contains an invalid argument` to
+ * any OAuth-authenticated request — verified live against music.youtube.com:
+ * the same search body returns 225 KB anonymously and 400 the moment the
+ * token is attached. What those clients want is a browser cookie, which this
+ * server does not have; what accepts the token is TVHTML5, which is why
+ * account-scoped library reads are proxied through TVHTML5 server-side
+ * (see services/youtubeLibrary.ts).
+ *
+ * The browser's youtubei.js Music client is WEB_REMIX, so injecting here
+ * would break search, the home feed, and play reporting for every linked
+ * account. Skipping injection lets those requests run anonymously, which is
+ * exactly what an unlinked account gets today — so linking an account can
+ * only ever add capabilities, never remove them.
+ */
+const OAUTH_REJECTING_CLIENTS = new Set([
+  "WEB",
+  "WEB_REMIX",
+  "MWEB",
+  "WEB_KIDS",
+  "WEB_EMBEDDED_PLAYER",
+  "MUSIC_KIDS",
+]);
+
+/** Reads `context.client.clientName` out of an InnerTube request body. */
+function innerTubeClientName(body: Buffer | undefined): string | null {
+  if (!body || body.byteLength > 256 * 1024) return null;
+  try {
+    const parsed = JSON.parse(body.toString("utf8")) as {
+      context?: { client?: { clientName?: unknown } };
+    };
+    const name = parsed?.context?.client?.clientName;
+    return typeof name === "string" && name ? name.toUpperCase() : null;
+  } catch {
+    // Not JSON (or not an InnerTube call) — no client to inspect.
+    return null;
+  }
+}
+
 export interface ForwardResult extends ProxyResponseOutput {}
 
 export async function forwardProxyRequest(
@@ -166,6 +207,8 @@ export async function forwardProxyRequest(
   // ever attached to youtube.com endpoints that need it — never carried
   // across a redirect to another (even allowlisted) origin.
   const bearerToken = userId ? await getValidAccessToken(db, config, userId) : null;
+  const requestClient = innerTubeClientName(body);
+  const clientRejectsAuth = requestClient !== null && OAUTH_REJECTING_CLIENTS.has(requestClient);
 
   let response: Response;
   try {
@@ -173,6 +216,8 @@ export async function forwardProxyRequest(
       isAllowed: isHostAllowed,
       prepare: (hopUrl, init) => {
         if (!bearerToken || !needsBearerAuth(hopUrl)) return init;
+        // The WEB family 400s on any OAuth token; leave those anonymous.
+        if (clientRejectsAuth) return init;
         return {
           ...init,
           headers: {

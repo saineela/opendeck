@@ -263,7 +263,9 @@ export function RecommendationsPage() {
                   <strong>{recommendation.title}</strong>
                   <span>
                     {recommendation.artist || "Unknown artist"}
-                    {tab === "inbox" ? ` · from ${recommendation.senderName}` : " · to a friend"}
+                    {tab === "inbox"
+                      ? ` · from ${recommendation.senderName}`
+                      : ` · to ${recommendation.recipientName ?? "a friend"}`}
                   </span>
                   {recommendation.note && <em className={styles.note}>“{recommendation.note}”</em>}
                 </span>

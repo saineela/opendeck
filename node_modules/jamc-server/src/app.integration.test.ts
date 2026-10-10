@@ -755,9 +755,17 @@ describe("server integration", () => {
       });
       expect(sent.status).toBe(201);
       const created = (await sent.json()) as {
-        recommendation: { id: string; senderName: string; durationSeconds: number; note: string };
+        recommendation: {
+          id: string;
+          senderName: string;
+          recipientName: string | null;
+          durationSeconds: number;
+          note: string;
+        };
       };
       expect(created.recommendation.senderName).toBe("Sender Sam");
+      // The send response names the recipient so the Sent list can render it.
+      expect(created.recommendation.recipientName).toBe("Recipient Rita");
       expect(created.recommendation.durationSeconds).toBe(242);
       expect(created.recommendation.note).toBe("This bassline!");
 
@@ -776,11 +784,13 @@ describe("server integration", () => {
       });
       expect(inbox.unreadCount).toBe(1);
 
-      // The sender's sent list shows the same item; the bystander sees none.
+      // The sender's sent list shows the same item, carrying the recipient's
+      // name for display; the bystander sees none.
       const sentList = (await (
         await fetch(`${running.base}/api/recommendations/sent`, { headers: { cookie: senderCookie } })
-      ).json()) as { recommendations: Array<{ videoId: string }> };
+      ).json()) as { recommendations: Array<{ videoId: string; recipientName: string | null }> };
       expect(sentList.recommendations.map((item) => item.videoId)).toEqual(["vid-rec-1"]);
+      expect(sentList.recommendations[0].recipientName).toBe("Recipient Rita");
       const bystanderInbox = (await (
         await fetch(`${running.base}/api/recommendations`, {
           headers: { cookie: `${SESSION_COOKIE}=${createSession(db, "rec-bystander")}` },

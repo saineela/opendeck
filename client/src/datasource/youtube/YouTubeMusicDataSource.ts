@@ -2,6 +2,7 @@ import { ClientType, Constants, Innertube, Platform, Types, YTNodes } from "yout
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import {
   cancelYouTubeLink,
+  fetchYouTubeLibrary,
   getYouTubeLinkStatus,
   refreshYouTubeLinkedFlag,
   signOut as signOutGoogle,
@@ -2399,6 +2400,75 @@ export class YouTubeMusicDataSource extends DataSource {
     return (await this.refreshLibrary(cacheKey)).value;
   }
 
+  /**
+   * Loads the library through the server's TVHTML5 proxy.
+   *
+   * Returns null when the endpoint is unavailable (older server, network
+   * failure) so the caller can fall back to the in-page WEB_REMIX path.
+   * Throws only for auth-shaped failures that the caller should surface.
+   */
+  private async fetchLibraryFromServer(): Promise<LibrarySnapshot | null> {
+    try {
+      const payload = await fetchYouTubeLibrary();
+      const toTrack = (item: {
+        id: string;
+        title: string;
+        artist: string;
+        artworkUrl?: string;
+        durationSec?: number;
+      }): Track => ({
+        id: item.id,
+        source: "youtube",
+        title: item.title,
+        artist: item.artist,
+        durationSec: item.durationSec,
+        artworkUrl: item.artworkUrl,
+      });
+
+      const likedSongs = payload.likedSongs.map(toTrack);
+      const playlists: Playlist[] = payload.playlists
+        .filter((playlist) => playlist.id !== LIKED_SONGS_PLAYLIST_ID)
+        .map((playlist) => ({
+          id: playlist.id,
+          title: playlist.title,
+          owner: playlist.owner,
+          artworkUrl: playlist.artworkUrl,
+          kind: "playlist",
+          isEditable: false,
+        }));
+
+      return {
+        account: {
+          name: payload.account.name ?? this.musicAccountName,
+          artworkUrl: this.musicAccountArtworkUrl ?? undefined,
+        },
+        albums: payload.albums.map((album) => ({
+          id: album.id,
+          title: album.title,
+          artist: album.artist,
+          artworkUrl: album.artworkUrl,
+        })),
+        playlists,
+        likedSongsPlaylist: {
+          id: LIKED_SONGS_PLAYLIST_ID,
+          title: "Liked Music",
+          owner: "You",
+          artworkUrl: payload.playlists.find((p) => p.id === LIKED_SONGS_PLAYLIST_ID)?.artworkUrl,
+          kind: "liked-songs",
+          isEditable: false,
+        },
+        likedSongs,
+        recentlyPlayed: payload.recentlyPlayed.map(toTrack),
+      };
+    } catch (error) {
+      // 409 = nothing linked (the caller already checked), 401 = signed out:
+      // both mean "use the normal path" rather than a hard failure.
+      const message = error instanceof Error ? error.message : String(error);
+      logInternalWarn("YouTubeMusicDataSource.fetchLibraryFromServer failed", { error: message });
+      return null;
+    }
+  }
+
   private hasLibraryContent(library: LibrarySnapshot): boolean {
     return library.albums.length > 0
       || library.playlists.length > 0
@@ -2428,6 +2498,22 @@ export class YouTubeMusicDataSource extends DataSource {
       throw new Error(
         "Your YouTube Music account is not connected yet. Open Settings → Account and use \"Connect YouTube Music\" first.",
       );
+    }
+
+    // The browser cannot read its own library: an OAuth token is rejected by
+    // WEB_REMIX (the client a browser sends) with 400, so the server performs
+    // the read with TVHTML5 and returns plain JSON. Fall through to the legacy
+    // in-page path only when that endpoint is unavailable.
+    const fromServer = await this.fetchLibraryFromServer();
+    if (fromServer) {
+      await this.cachePlaylistTracks(LIKED_SONGS_PLAYLIST_ID, fromServer.likedSongs);
+      logInternalInfo("YouTubeMusicDataSource.getLibrary via server", {
+        albumCount: fromServer.albums.length,
+        playlistCount: fromServer.playlists.length,
+        likedSongCount: fromServer.likedSongs.length,
+        recentTrackCount: fromServer.recentlyPlayed.length,
+      });
+      return fromServer;
     }
 
     let client = await this.getMusicClient();

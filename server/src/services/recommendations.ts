@@ -32,6 +32,7 @@ export interface RecommendationItem {
   senderUserId: string;
   senderName: string;
   recipientUserId: string;
+  recipientName: string | null;
   videoId: string;
   title: string;
   artist: string;
@@ -48,6 +49,7 @@ interface RecommendationRow {
   sender_user_id: string;
   sender_name: string;
   recipient_user_id: string;
+  recipient_name: string | null;
   video_id: string;
   title: string;
   artist: string;
@@ -65,6 +67,8 @@ function toItem(row: RecommendationRow): RecommendationItem {
     senderUserId: row.sender_user_id,
     senderName: row.sender_name,
     recipientUserId: row.recipient_user_id,
+    // Null when the recipient deleted their account after receiving it.
+    recipientName: row.recipient_name ?? null,
     videoId: row.video_id,
     title: row.title,
     artist: row.artist,
@@ -101,8 +105,10 @@ export function sendRecommendation(db: Db, input: RecommendationInput): Recommen
   );
   const row = db
     .prepare(
-      `SELECT r.*, s.name AS sender_name
-       FROM recommendations r JOIN users s ON s.id = r.sender_user_id
+      `SELECT r.*, s.name AS sender_name, rc.name AS recipient_name
+       FROM recommendations r
+       JOIN users s ON s.id = r.sender_user_id
+       LEFT JOIN users rc ON rc.id = r.recipient_user_id
        WHERE r.id = ?`,
     )
     .get(id) as unknown as RecommendationRow;
@@ -116,8 +122,10 @@ export function listRecommendations(
 ): { recommendations: RecommendationItem[]; unreadCount: number } {
   const rows = db
     .prepare(
-      `SELECT r.*, s.name AS sender_name
-       FROM recommendations r JOIN users s ON s.id = r.sender_user_id
+      `SELECT r.*, s.name AS sender_name, rc.name AS recipient_name
+       FROM recommendations r
+       JOIN users s ON s.id = r.sender_user_id
+       LEFT JOIN users rc ON rc.id = r.recipient_user_id
        WHERE r.recipient_user_id = ? ${options.unreadOnly ? "AND r.read_at IS NULL" : ""}
        ORDER BY r.created_at DESC
        LIMIT ?`,
@@ -132,8 +140,10 @@ export function listRecommendations(
 export function listSentRecommendations(db: Db, userId: string, limit: number): RecommendationItem[] {
   const rows = db
     .prepare(
-      `SELECT r.*, s.name AS sender_name
-       FROM recommendations r JOIN users s ON s.id = r.sender_user_id
+      `SELECT r.*, s.name AS sender_name, rc.name AS recipient_name
+       FROM recommendations r
+       JOIN users s ON s.id = r.sender_user_id
+       LEFT JOIN users rc ON rc.id = r.recipient_user_id
        WHERE r.sender_user_id = ?
        ORDER BY r.created_at DESC
        LIMIT ?`,
