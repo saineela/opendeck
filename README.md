@@ -87,13 +87,6 @@ Server configuration lives in environment variables (see `.env` and `webapp/serv
 </p>
 
 ## Roadmap 📌
-
-- Crossfade and a Web Audio equalizer (borrowed from how good modern clients do it)
-- Last.fm scrobbling
-- Multi-source lyrics with scored matching (LRCLIB, Genius) instead of a single provider
-- SponsorBlock integration
-- Playlist import/export (Spotify/YouTube Music links)
-- Mobile PWA installability and offline shell
 - ~~Discord Rich Presence~~
 - ~~Secret Show (private listening exceptions)~~
 - ~~Admin instance theme~~
