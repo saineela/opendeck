@@ -686,6 +686,54 @@ Revokes the token remotely (best effort) and deletes local rows.
 { "state": "idle", "linked": false }
 ```
 
+#### `GET /api/youtube/library`
+
+The linked account's YouTube Music library — playlists, liked songs, saved
+albums, and recently played — as plain JSON.
+
+This endpoint exists because **an OAuth token is rejected by the client a
+browser sends**. InnerTube's `WEB_REMIX` (client 67) answers
+`400 Request contains an invalid argument` to every OAuth-authenticated
+request, regardless of `X-Goog-AuthUser`, `Origin`, or `Referer`; it wants a
+browser cookie this server does not have. The same token succeeds against
+`TVHTML5` (client 7), so the read runs server-side there and the TV-shaped
+payload (`tvBrowseRenderer` / `tileRenderer`) is normalised below.
+
+| Status | Case |
+|---|---|
+| **200** | Library returned (an account with an empty library still gets 200) |
+| **401** | Not signed in |
+| **409** | No YouTube Music account is linked on this account |
+| **502** | YouTube Music did not return a library (upstream failure/timeout) |
+
+```json
+// 200
+{
+  "account": { "name": null },
+  "playlists": [
+    { "id": "LM", "title": "Liked Music", "owner": "You",
+      "artworkUrl": "https://…/liked-songs-576.png", "trackCount": 51 },
+    { "id": "PLUVfMkXK0SrfyJ0A7n4FskNjFgNc3aXXB", "title": "Sai Music",
+      "owner": "GingyBaby", "artworkUrl": "https://…", "trackCount": 4 }
+  ],
+  "likedSongs": [
+    { "id": "UNZqm3dxd2w", "title": "The Box", "artist": "Roddy Ricch",
+      "artworkUrl": "https://i.ytimg.com/vi/UNZqm3dxd2w/hq720.jpg…", "durationSec": 213 }
+  ],
+  "albums": [],
+  "recentlyPlayed": [
+    { "id": "…", "title": "Lucid Dreams", "artist": "Juice WRLD", "durationSec": 240 }
+  ]
+}
+```
+
+`id` is the bare playlist id with the `VL` browse prefix stripped (`LM` is
+the auto Liked Music playlist, so it also appears in `playlists`); `artist`
+is an empty string when YouTube supplied none; `account.name` is always null
+here — the display name comes from the OpenDeck session, not YouTube.
+Continuation pages are followed (capped at 8 per surface) and each upstream
+call is bounded to 25s.
+
 ---
 
 ### 2.5 InnerTube / upstream proxy — `POST /api/yt/proxy`
@@ -1178,7 +1226,7 @@ Recommendation item shape (returned by every list and the send route):
 {
   "id": "0f9c…",
   "senderUserId": "u-sam", "senderName": "Sam",
-  "recipientUserId": "u-rita",
+  "recipientUserId": "u-rita", "recipientName": "Rita",
   "videoId": "dQw4w9WgXcQ",
   "title": "Never Gonna Give You Up",
   "artist": "Rick Astley",
@@ -1193,8 +1241,10 @@ Recommendation item shape (returned by every list and the send route):
 
 `artist` is an empty string when unknown; `album`/`artworkUrl`/
 `durationSeconds`/`note` are `null` when absent; `readAt` is null while
-unread. Email addresses never appear anywhere in this surface — the
-directory exposes ids, display names, and pictures only.
+unread. `recipientName` is what makes the Sent list readable — it is
+`null` once the recipient deletes their account. Email addresses never
+appear anywhere in this surface — the directory exposes ids, display
+names, and pictures only.
 
 #### `POST /api/recommendations`
 
@@ -1337,6 +1387,7 @@ never fails the recommendation that triggered it.
 | POST | `/api/youtube/link` | **session** | 10 | Device-code start (idempotent) |
 | POST | `/api/youtube/cancel` | **session** | — | Abort pending poll |
 | POST | `/api/youtube/unlink` | **session** | — | Revoke + delete |
+| GET | `/api/youtube/library` | **session** | — | Linked account's library via TVHTML5 · 409 not linked · 502 upstream |
 | POST | `/api/yt/proxy` | cookie | 900 | Upstream envelope; Bearer injected when linked |
 | GET | `/api/media/stream` | — | 300 | googlevideo passthrough + Range · records play history |
 | POST | `/api/cache/get` | — | 600 | Caller namespace |

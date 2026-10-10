@@ -13,6 +13,7 @@ import {
   saveYouTubeTokens,
   unlinkYouTubeAccount,
 } from "../services/youtubeAccount.js";
+import { getYouTubeLibrary } from "../services/youtubeLibrary.js";
 import { logger } from "../logger.js";
 
 /**
@@ -139,6 +140,38 @@ export function createYoutubeAuthRoutes(db: Db, config: ServerConfig): Router {
 
   router.get("/status", requireAuth, (req: Request, res: Response) => {
     res.json(buildStatus(db, req.sessionUserId!));
+  });
+
+  /**
+   * The linked account's YouTube Music library, normalised server-side.
+   *
+   * This exists because an OAuth token only works against InnerTube's TVHTML5
+   * client — WEB_REMIX (what a browser sends) rejects OAuth outright — so the
+   * browser cannot read its own library. The server holds the refresh token
+   * and does the TVHTML5 round trip here, returning plain JSON.
+   *
+   * 409 when no account is linked; 502 when YouTube is unreachable.
+   */
+  router.get("/library", requireAuth, async (req: Request, res: Response) => {
+    const userId = req.sessionUserId!;
+    if (!hasValidYouTubeLink(db, userId)) {
+      res.status(409).json({ error: "No YouTube Music account is linked yet." });
+      return;
+    }
+    try {
+      const library = await getYouTubeLibrary(db, config, userId);
+      if (!library) {
+        res.status(502).json({ error: "YouTube Music did not return a library." });
+        return;
+      }
+      res.json(library);
+    } catch (error) {
+      logger.error("youtube.library route failed", {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      res.status(502).json({ error: "Unable to load the YouTube Music library." });
+    }
   });
 
   router.post("/link", requireAuth, startLimit, async (req: Request, res: Response) => {

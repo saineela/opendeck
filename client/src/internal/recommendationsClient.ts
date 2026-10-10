@@ -12,6 +12,8 @@ export interface Recommendation {
   senderUserId: string;
   senderName: string;
   recipientUserId: string;
+  /** Recipient display name; null once they delete their account. */
+  recipientName: string | null;
   videoId: string;
   title: string;
   artist: string;

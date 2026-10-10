@@ -1183,6 +1183,43 @@ paths:
                   linked: { type: boolean, const: false }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/youtube/library:
+    get:
+      tags: [YouTube]
+      operationId: youtubeLibrary
+      summary: Linked account's YouTube Music library (normalised server-side)
+      description: |
+        Reads the linked account's library — playlists, liked songs, saved
+        albums, and recently played — and returns plain JSON.
+
+        This endpoint exists because an OAuth token is **rejected by the
+        WEB_REMIX client a browser sends** (`400 Request contains an invalid
+        argument`, regardless of `X-Goog-AuthUser`, `Origin`, or `Referer`).
+        The same token succeeds against InnerTube's TVHTML5 client, so this
+        server performs the read with TVHTML5 and normalises its `tvBrowseRenderer`
+        / `tileRenderer` payload into the shapes below.
+
+        Rate limited by the `yt-link-start` bucket (10/min) is **not** applied;
+        TVHTML5 fetches are bounded to 25s each and continuation pages are
+        capped at 8 per surface.
+      responses:
+        "200":
+          description: Normalised library
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/YouTubeLibrary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: No YouTube Music account is linked on this account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: YouTube Music did not return a library (upstream failure)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/yt/proxy:
     post:
       tags: [Proxy]
@@ -2422,6 +2459,55 @@ components:
         expiresInSec: { type: number, description: Seconds until the device code expires }
         error: { type: string, description: Failure reason (expired/cancelled/denied) }
 
+    YouTubeLibrary:
+      type: object
+      required: [account, playlists, likedSongs, albums, recentlyPlayed]
+      properties:
+        account:
+          type: object
+          required: [name]
+          description: "YouTube never supplies the display name here — the OpenDeck session does."
+          properties:
+            name: { type: [string, "null"] }
+        playlists:
+          type: array
+          description: "Saved playlists, excluding the auto `LM` (Liked Music) entry — that is returned as `likedSongsPlaylist` semantics via the `LM` id."
+          items:
+            type: object
+            required: [id, title, owner]
+            properties:
+              id: { type: string, description: "Playlist id without the `VL` browse prefix (e.g. `LM`, `PLabc…`)" }
+              title: { type: string }
+              owner: { type: string }
+              artworkUrl: { type: string, format: uri }
+              trackCount: { type: integer }
+        likedSongs:
+          type: array
+          items: { $ref: "#/components/schemas/YouTubeLibraryTrack" }
+        albums:
+          type: array
+          items:
+            type: object
+            required: [id, title, artist]
+            properties:
+              id: { type: string }
+              title: { type: string }
+              artist: { type: string }
+              artworkUrl: { type: string, format: uri }
+        recentlyPlayed:
+          type: array
+          items: { $ref: "#/components/schemas/YouTubeLibraryTrack" }
+
+    YouTubeLibraryTrack:
+      type: object
+      required: [id, title, artist]
+      properties:
+        id: { type: string, description: YouTube video id }
+        title: { type: string }
+        artist: { type: string, description: "Empty string when YouTube did not supply one" }
+        artworkUrl: { type: string, format: uri }
+        durationSec: { type: integer }
+
     ProxyRequest:
       type: object
       required: [url]
@@ -2533,12 +2619,15 @@ components:
     Recommendation:
       type: object
       description: A song one registered user sent to another, with the track metadata snapshotted at send time
-      required: [id, senderUserId, senderName, recipientUserId, videoId, title, artist, album, artworkUrl, durationSeconds, note, createdAt, readAt]
+      required: [id, senderUserId, senderName, recipientUserId, recipientName, videoId, title, artist, album, artworkUrl, durationSeconds, note, createdAt, readAt]
       properties:
         id: { type: string, format: uuid }
         senderUserId: { type: string, format: uuid }
         senderName: { type: string, description: Display name of the sender at read time }
         recipientUserId: { type: string, format: uuid }
+        recipientName:
+          type: [string, "null"]
+          description: Display name of the recipient at read time; null once they delete their account
         videoId: { type: string }
         title: { type: string }
         artist: { type: string, description: Empty string when unknown }
