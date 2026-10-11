@@ -4,7 +4,7 @@
 <p align="center">
   <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/releases/latest"><img src="https://img.shields.io/github/downloads/saineela/JustAnotherMusicClient-WebApp/total?style=for-the-badge&color=FF0000&label=downloads" alt="Downloads"></a>
   <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/blob/main/webapp/package.json"><img src="https://img.shields.io/badge/version-1.0.0-ff3d00?style=for-the-badge" alt="Version"></a>
-  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/blob/main/webapp/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-ff6900?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-ff6900?style=for-the-badge" alt="License"></a>
   <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp"><img src="https://img.shields.io/github/stars/saineela/JustAnotherMusicClient-WebApp?style=for-the-badge&color=ff9700&label=stars" alt="Stars"></a>
 </p>
 <br>
