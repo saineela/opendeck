@@ -28,15 +28,6 @@ song management, and the general UI language.
 | First-run setup + invite codes | Zero-account instances show a setup screen; registration is env- and admin-switchable |
 | Hardening | Per-IP rate limits on every auth route, account lockout, CSRF origin checks, constant-time comparisons, session revocation |
 
-### Discord presence, reimagined for a server
-
-| Addition | Detail |
-|---|---|
-| Server-driven Rich Presence | Browsers can't touch Discord IPC; the Node server pushes to the local Discord client, so **tracks played through the HTTP API appear too**, attributed to the API key's owner |
-| Custom presence message | User-editable status line ("Coding OpenDeck") above the track + optional "via OpenDeck" platform tag; per account, durable server-side |
-| **Secret Show** *(novel — no upstream issue exists for this)* | Per-account exception list of songs that play freely but never touch Discord; profile shows "nothing playing". Enforced server-side (browser reports *and* API plays), so it can't be bypassed. Right-click any song → "Secret Show — hide from Discord", or manage the list in Settings → Account |
-| Honest capability reporting | `/api/presence/status` reports whether the *server* can reach a Discord client; the UI says "Not set up" instead of silently doing nothing |
-
 ### Platform & theming
 
 | Addition | Detail |
@@ -85,23 +76,11 @@ researched from YTubic and others; several are already on the roadmap.
 > A few things I built along the way that might interest this project, in case
 > any are worth upstreaming or discussing:
 >
-> 1. **Secret Show — private listening exceptions.** A per-account list of
->    songs that play normally but never appear on Discord; the profile just
->    shows nothing playing. Right-click → toggle, managed in settings. In my
->    port it's enforced server-side so API-triggered plays respect it too. I
->    didn't find an issue for this here, so I'm floating it as an idea: a
->    "hide this song from Discord" toggle next to the existing RPC code would
->    be a small, self-contained addition to the Tauri build.
-> 2. **Custom presence message.** Users edit their own status line above the
->    track ("Coding JAMC"), plus an optional "via <app>" platform tag — small
->    change to the activity payload, big personalization win. The release
->    notes mention displaying the song title instead of the app name, so this
->    extends that direction.
-> 3. **Instance/default theme concept.** For anyone self-hosting variants:
+> > 1. **Instance/default theme concept.** For anyone self-hosting variants:
 >    an admin-chosen default theme that also styles the sign-in surface, while
 >    each user keeps their own override. Directly relevant to the
 >    customization requests in #1 and the theming discussion in #49.
-> 4. **Server-side shared artwork cache.** In my port, album art is fetched
+> 2. **Server-side shared artwork cache.** In my port, album art is fetched
 >    once per *instance* (SQLite BLOBs, ETag/304, LRU by least-played, admin
 >    budget) instead of once per client. For JAMC this idea could translate to
 >    a smarter on-disk image cache with proper eviction — you already do
@@ -125,9 +104,7 @@ researched from YTubic and others; several are already on the roadmap.
   perpetual, worldwide, irrevocable, sublicensable license to your work.
   Read [CLA.md](https://github.com/2latemc/JustAnotherMusicClient/blob/main/CLA.md)
   before a PR; posting an idea in an issue carries no such grant.
-- Relevant upstream issues: **#1** (feature requests: Discord RPC,
-  customization), **#36** (dynamic colors from album cover), **#49**
-  (theming). Secret Show and the custom presence message have **no** existing
-  issue — they're genuinely new suggestions.
+- Relevant upstream issues: **#1** (feature requests and customization),
+  **#36** (dynamic colors from album cover), **#49** (theming).
 - Legal contact upstream: team@2late.org. Sponsored via Ko-fi/GitHub
   Sponsors (`2latemc`).

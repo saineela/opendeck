@@ -114,11 +114,6 @@ export function Layout({
   const [isDocumentVisible, setIsDocumentVisible] = useState(
     () => document.visibilityState === "visible",
   );
-  const [glassBackdropStyle, setGlassBackdropStyle] = useState<CSSProperties>({
-    "--glass-window-x": "0px",
-    "--glass-window-y": "0px",
-  } as CSSProperties);
-
   const clearScrollHideTimer = useCallback(() => {
     if (scrollHideTimerRef.current === null) return;
     window.clearTimeout(scrollHideTimerRef.current);
@@ -254,27 +249,18 @@ export function Layout({
     return () => document.removeEventListener("visibilitychange", updateVisibility);
   }, []);
 
-  useEffect(() => {
-    if (appTheme !== "glass") return undefined;
-    // The desktop app parallax-shifted the glass backdrop with the OS window
-    // position; a browser window position is not observable, so keep a fixed
-    // backdrop.
-    setGlassBackdropStyle({
-      "--glass-window-x": "0px",
-      "--glass-window-y": "0px",
-    } as CSSProperties);
-    return undefined;
-  }, [appTheme]);
-
   return (
     <div
       className={styles.layout}
       data-theme-root
-      style={appTheme === "glass" ? glassBackdropStyle : undefined}
+      style={appTheme === "glass" ? {
+        "--glass-window-x": "0px",
+        "--glass-window-y": "0px",
+      } as CSSProperties : undefined}
     >
-      <div className={styles.themeBackdrop} data-theme-backdrop aria-hidden="true">
-        {appTheme === "matrix" && isDocumentVisible
-          ? MATRIX_RAIN_COLUMNS.map((column, index) => (
+      {appTheme === "matrix" && isDocumentVisible && !paperPcMode ? (
+        <div className={styles.themeBackdrop} data-theme-backdrop aria-hidden="true">
+          {MATRIX_RAIN_COLUMNS.map((column, index) => (
             <span
               key={`${index}-${column.text}`}
               className={styles.themeRainColumn}
@@ -284,9 +270,9 @@ export function Layout({
             >
               {column.text}
             </span>
-          ))
-          : null}
-      </div>
+          ))}
+        </div>
+      ) : null}
       {!paperPcMode && isDocumentVisible && <StarField />}
       
       <div className={styles.mainContent}>

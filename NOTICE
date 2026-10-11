@@ -28,9 +28,6 @@ Modifications made in this project include, without limitation:
     and a documented bearer-key-compatible HTTP API
   * twelve built-in interface themes plus custom CSS theme support, with an
     admin-set instance default that also styles the sign-in page
-  * Discord Rich Presence driven from the server, with per-account settings,
-    a custom status message, and per-account "Secret Show" exceptions that
-    keep chosen songs off the profile
   * an offline feature that stores audio in the listener's own browser
     storage (IndexedDB) rather than on a shared server disk; the server
     relays audio for playback without writing audio files to its own disk

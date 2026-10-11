@@ -28,13 +28,6 @@ export interface ServerConfig {
   totpIssuer: string;
   trustProxy: boolean;
   serveClient: boolean;
-  /**
-   * Discord application id used for Rich Presence. Optional: presence is a
-   * no-op without it. The server pushes to the *local* Discord client over
-   * IPC, so this only reaches a Discord running on the same machine as the
-   * OpenDeck server — see services/discordRpc.ts.
-   */
-  discordClientId: string | null;
 }
 
 function resolveAppSecret(env: NodeJS.ProcessEnv, dataDir: string, nodeEnv: string): Buffer {
@@ -125,6 +118,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     totpIssuer: env.TOTP_ISSUER?.trim() || "OpenDeck",
     trustProxy: env.TRUST_PROXY === "1" || env.TRUST_PROXY === "true",
     serveClient: env.SERVE_CLIENT !== "0",
-    discordClientId: env.DISCORD_CLIENT_ID?.trim() || null,
   };
 }

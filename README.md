@@ -23,7 +23,7 @@ OpenDeck is an independent open-source software project intended for development
 
 OpenDeck brings YouTube Music to a server you control: one container, one process, **any number of accounts**. Every person who signs in gets their own isolated library — playlists, likes, settings, API keys, and YouTube Music link — while the server caches artwork and API responses **once for everyone**, so a household of listeners costs a fraction of the upstream traffic.
 
-The UI, player, and feature set build closely on JustAnotherMusicClient; the desktop shell is replaced by a Node backend with real accounts, second-factor auth, and an HTTP API, and features like Discord presence are reworked for a shared server. This is a derivative work — attribution and licensing are in [Credits and license](#credits-and-license), and what the audio pipeline actually does is described in [Legal](#legal).
+The UI, player, and feature set build closely on JustAnotherMusicClient; the desktop shell is replaced by a Node backend with real accounts, second-factor auth, and an HTTP API. This is a derivative work — attribution and licensing are in [Credits and license](#credits-and-license), and what the audio pipeline actually does is described in [Legal](#legal).
 
 If you like this project, **starring it on GitHub** helps a lot!
 
@@ -32,9 +32,6 @@ If you like this project, **starring it on GitHub** helps a lot!
 | Feature | Description |
 |---|---|
 | Multi-user accounts | Each account gets its own playlists, likes, settings, API keys, and YouTube link — fully isolated per user |
-| Discord Rich Presence | Shows what you're listening to, with artwork and a link back — driven server-side, so tracks played through the HTTP API count too |
-| **Secret Show** | A per-account exception list: those songs play freely but never touch Discord — your profile just shows nothing playing |
-| Custom presence message | Edit your own status line ("Coding OpenDeck") above the track, plus an optional "via OpenDeck" platform tag |
 | Two-factor auth | TOTP (RFC 6238) with single-use backup codes; disabling requires password + live code |
 | Any OIDC sign-in | Google, Keycloak, Authentik — authorization-code + PKCE, configurable at runtime from the admin panel |
 | Admin panel | Create users, change roles, revoke sessions, reset 2FA, format the artwork cache, set the **instance theme**, and run a TOTP-gated instance reset |
@@ -96,8 +93,6 @@ Server configuration lives in environment variables (see `.env` and `webapp/serv
 - SponsorBlock integration
 - Playlist import/export (Spotify/YouTube Music links)
 - Mobile PWA installability and offline shell
-- ~~Discord Rich Presence~~
-- ~~Secret Show (private listening exceptions)~~
 - ~~Admin instance theme~~
 - ~~Server-side artwork cache shared across users~~
 - ~~HTTP API with per-account keys and full docs~~
@@ -105,7 +100,7 @@ Server configuration lives in environment variables (see `.env` and `webapp/serv
 
 ## Platform Support 💻
 
-OpenDeck is a web app: it runs on **any OS** where Node.js or Docker runs — Windows, macOS, Linux, NAS boxes, and small servers — and is listened to from any modern browser on desktop or phone. The Discord bridge talks to the Discord desktop client running **on the server's machine**; a remote server cannot push presence to your local Discord (the UI reports this honestly instead of silently doing nothing).
+OpenDeck is a web app: it runs on **any OS** where Node.js or Docker runs — Windows, macOS, Linux, NAS boxes, and small servers — and is listened to from any modern browser on desktop or phone.
 
 ### Notes
 
@@ -211,7 +206,7 @@ npm run test:e2e   # Playwright end-to-end
 ```
 opendeck/
 ├── client/          # React + Vite SPA (player, UI, datasources, plugins)
-├── server/          # Express + better-sqlite3 (auth, library, cache, API, Discord bridge)
+├── server/          # Express + SQLite (auth, library, cache, API)
 ├── docs/            # API.md, INTEGRATION.md, openapi.yaml, FEATURE_INVENTORY.md
 ├── assets/img/      # README images and the app logo
 └── Dockerfile, docker-compose.yml

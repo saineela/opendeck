@@ -40,7 +40,6 @@ import {
   setDebugOverlayEnabled,
   useDebugOverlayEnabled,
 } from "./settings/debugOverlay";
-import { hydratePresenceSettings } from "../internal/presenceClient";
 import {
   getAppSetting,
   removeAppSetting,
@@ -221,10 +220,6 @@ export default function App() {
     // Pull the admin Debug switch from durable settings so it survives a
     // reload and follows the account across devices.
     void hydrateDebugOverlaySetting();
-    // Adopt the account's Discord Rich Presence switch before the player
-    // reports anything.
-    void hydratePresenceSettings();
-
     return () => {
       cancelled = true;
     };
@@ -1319,7 +1314,7 @@ export default function App() {
           {playerUIState.isLyricsOpen && activeTab?.view !== "settings" ? (
             <LyricsView onClose={() => playerUIStore.setLyricsOpen(false)} />
           ) : (
-          <div key={activeViewKey} className={styles.viewTransition}>
+          <div key={activeViewKey} className={styles.viewTransition} data-app-view>
             {activeTab?.view === "home" && (
               <HomePage
                 tabId={activeTabId}

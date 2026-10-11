@@ -3,8 +3,7 @@
 Complete HTTP reference for **OpenDeck**, the standalone music service
 (server package `opendeck-server`, Express 5 + `node:sqlite`). Everything a
 client needs to create accounts, sign in (password, TOTP, Google), manage a
-per-user library, search, stream audio, cache data, persist settings, and
-scrobble.
+per-user library, search, stream audio, cache data, and persist settings.
 
 - Companion guides: [INTEGRATION.md](INTEGRATION.md) (system integration,
   deployment, flows), [openapi.yaml](openapi.yaml) (machine-readable spec),

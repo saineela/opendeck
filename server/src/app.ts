@@ -19,10 +19,8 @@ import { createAdminRoutes } from "./routes/admin.js";
 import { createHistoryRoutes } from "./routes/history.js";
 import { createMediaRoutes } from "./routes/media.js";
 import { createRecommendationsRoutes, createPushRoutes } from "./routes/recommendations.js";
-import { createPresenceRoutes } from "./routes/presence.js";
 import { renderApiDocsPage } from "./services/apiDocs.js";
 import { configureProxyHosts } from "./services/proxy.js";
-import { configureDiscord } from "./services/discordRpc.js";
 import { logger } from "./logger.js";
 
 function resolveClientDist(): string {
@@ -98,7 +96,6 @@ function renderTextDocPage(title: string, content: string): string {
 
 export function createApp(config: ServerConfig, db: Db): Express {
   configureProxyHosts(config);
-  configureDiscord(config);
 
   const app = express();
   if (config.trustProxy) app.set("trust proxy", 1);
@@ -179,7 +176,6 @@ export function createApp(config: ServerConfig, db: Db): Express {
   app.use("/api/media", createMediaRoutes(db));
   app.use("/api/recommendations", createRecommendationsRoutes(db));
   app.use("/api/push", createPushRoutes(db));
-  app.use("/api/presence", createPresenceRoutes(db));
 
   app.use("/api", (_req: Request, res: Response) => {
     res.status(404).json({ error: "Not found." });

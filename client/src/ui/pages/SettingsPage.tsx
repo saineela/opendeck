@@ -19,7 +19,6 @@ import {
   IconPalette,
   IconRefresh,
   IconShieldExclamation,
-  IconEyeOff,
   IconTrash,
   IconUser,
 } from "@tabler/icons-react";
@@ -39,18 +38,6 @@ import {
 } from "../../internal/cache";
 import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import { setDebugOverlayEnabled, useDebugOverlayEnabled } from "../settings/debugOverlay";
-import {
-  DEFAULT_PRESENCE_SETTINGS,
-  addSecretTrackShared,
-  getPresenceStatus,
-  getPresenceSettings,
-  getSecretTracks,
-  removeSecretTrackShared,
-  savePresenceSettings,
-  type PresenceSettings,
-  type PresenceStatus,
-  type SecretTrack,
-} from "../../internal/presenceClient";
 import type { LibraryController, LibraryState } from "../../player/LibraryController";
 import {
   setExtraPlayerControlsAlwaysVisible,
@@ -145,27 +132,6 @@ import {
 import styles from "./SettingsPage.module.css";
 
 type SettingsTab = "about" | "system" | "shortcuts" | "window" | "plugins" | "api" | "admin";
-
-/**
- * Pull a video id out of a pasted YouTube link, share URL, or bare id.
- * Secret Show matches on the id, so the input accepts every shape users paste.
- */
-function extractVideoId(input: string): string | null {
-  const bare = input.match(/^[A-Za-z0-9_-]{11}$/);
-  if (bare) return input;
-  try {
-    const url = new URL(input);
-    const fromParam = url.searchParams.get("v");
-    if (fromParam && /^[A-Za-z0-9_-]{11}$/.test(fromParam)) return fromParam;
-    const segments = url.pathname.split("/").filter(Boolean);
-    const marker = segments.findIndex((segment) => segment === "shorts" || segment === "embed");
-    const candidate = marker >= 0 ? segments[marker + 1] : segments.at(-1);
-    if (candidate && /^[A-Za-z0-9_-]{11}$/.test(candidate)) return candidate;
-  } catch {
-    // Not a URL — fall through to the null below.
-  }
-  return null;
-}
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "about", label: "About" },
@@ -384,17 +350,6 @@ export function SettingsPage({
   const accountPlaybackEnabled = authenticatedStreaming && youtubeScrobbling;
   const isAdmin = auth.session.role === "admin";
   const debugOverlayEnabled = useDebugOverlayEnabled();
-  const [presenceSettings, setPresenceSettings] = useState<PresenceSettings>({
-    ...DEFAULT_PRESENCE_SETTINGS,
-  });
-  const [presenceStatus, setPresenceStatus] = useState<PresenceStatus | null>(null);
-  const [presenceBusy, setPresenceBusy] = useState(false);
-  const [presenceError, setPresenceError] = useState<string | null>(null);
-  // Secret Show: songs that play freely but never reach Discord.
-  const [secretTracks, setSecretTracks] = useState<SecretTrack[]>([]);
-  const [secretBusy, setSecretBusy] = useState(false);
-  const [secretError, setSecretError] = useState<string | null>(null);
-  const [secretInput, setSecretInput] = useState("");
   const visibleTabs = SETTINGS_TABS.filter((tab) => tab.id !== "admin" || isAdmin);
   const activeTabIndex = Math.max(0, visibleTabs.findIndex((tab) => tab.id === activeTab));
   const authBusy = libraryState.status === "restoring"
@@ -446,6 +401,7 @@ export function SettingsPage({
   };
 
   useEffect(() => {
+    if (activeTab !== "system") return undefined;
     let active = true;
     void getCacheStats()
       .then((stats) => {
@@ -459,12 +415,12 @@ export function SettingsPage({
     return () => {
       active = false;
     };
-  }, []);
+  }, [activeTab]);
 
   // Artwork usage is a global, signed-in-only view: the server answers 401
   // for anonymous callers, so don't fire the request until there is a session.
   useEffect(() => {
-    if (!auth.session.authenticated) {
+    if (!auth.session.authenticated || activeTab !== "system") {
       setArtworkStats(null);
       return undefined;
     }
@@ -483,11 +439,11 @@ export function SettingsPage({
     return () => {
       active = false;
     };
-  }, [auth.session.authenticated]);
+  }, [activeTab, auth.session.authenticated]);
 
   useEffect(() => {
-    if (!auth.session.authenticated) {
-      setApiKeys([]);
+    if (!auth.session.authenticated || activeTab !== "api") {
+      if (!auth.session.authenticated) setApiKeys([]);
       setApiKeyCreated(null);
       return undefined;
     }
@@ -504,7 +460,7 @@ export function SettingsPage({
     return () => {
       active = false;
     };
-  }, [auth.session.authenticated]);
+  }, [activeTab, auth.session.authenticated]);
 
   // The Admin tab only exists for admins; bounce off it if the role goes away.
   useEffect(() => {
@@ -548,72 +504,6 @@ export function SettingsPage({
       active = false;
     };
   }, [isAdmin, activeTab]);
-
-  useEffect(() => {
-    if (!auth.session.authenticated) return undefined;
-    let active = true;
-    void Promise.all([getPresenceSettings(), getPresenceStatus(), getSecretTracks()]).then(
-      ([settings, status, secret]) => {
-        if (!active) return;
-        setPresenceSettings(settings);
-        setPresenceStatus(status);
-        setSecretTracks(secret.tracks);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [auth.session.authenticated]);
-
-  const savePresence = async (next: PresenceSettings) => {
-    setPresenceBusy(true);
-    setPresenceError(null);
-    try {
-      const saved = await savePresenceSettings(next);
-      setPresenceSettings(saved);
-      // The switch can change whether the server reaches Discord at all.
-      setPresenceStatus(await getPresenceStatus());
-    } catch {
-      setPresenceError("Unable to save Discord settings.");
-    } finally {
-      setPresenceBusy(false);
-    }
-  };
-
-  /** Add by video id or YouTube link — the id is what the server matches. */
-  const handleAddSecretTrack = async () => {
-    const trimmed = secretInput.trim();
-    if (!trimmed) return;
-    const videoId = extractVideoId(trimmed);
-    if (!videoId) {
-      setSecretError("Paste a YouTube link or video id.");
-      return;
-    }
-    setSecretBusy(true);
-    setSecretError(null);
-    try {
-      const tracks = await addSecretTrackShared({ videoId, title: videoId, artist: "" });
-      setSecretTracks(tracks);
-      setSecretInput("");
-    } catch {
-      setSecretError("Could not add to Secret Show.");
-    } finally {
-      setSecretBusy(false);
-    }
-  };
-
-  const handleRemoveSecretTrack = async (videoId: string) => {
-    setSecretBusy(true);
-    setSecretError(null);
-    try {
-      const tracks = await removeSecretTrackShared(videoId);
-      setSecretTracks(tracks);
-    } catch {
-      setSecretError("Could not remove from Secret Show.");
-    } finally {
-      setSecretBusy(false);
-    }
-  };
 
   const saveCacheSize = async () => {
     const sizeGb = Number(cacheSizeGb);
@@ -1260,171 +1150,6 @@ export function SettingsPage({
 
           <SecurityCard />
 
-          <section className={styles.card} aria-labelledby="discord-settings-title">
-            <div className={styles.cardHeader}>
-              <div>
-                <h2 id="discord-settings-title">Discord Rich Presence</h2>
-                <p>
-                  Show what you are listening to on your Discord profile, with the
-                  artwork and a link back. Tracks played through the API count too.
-                </p>
-              </div>
-              <span className={styles.status}>
-                {!presenceStatus?.configured
-                  ? "Not set up"
-                  : presenceStatus.connected
-                    ? "Connected"
-                    : presenceStatus.unavailable
-                      ? "No Discord here"
-                      : "Idle"}
-              </span>
-            </div>
-
-            {presenceStatus?.configured && !presenceStatus.connected && (
-              <p className={styles.toggleDescription}>
-                This server has no Discord client to talk to. Rich Presence only
-                reaches a Discord running on the same machine as OpenDeck, so a
-                remote or headless server cannot push to your profile.
-              </p>
-            )}
-
-            <div className={styles.settingsList}>
-              <label className={styles.toggleRow}>
-                <span className={styles.toggleDescription}>
-                  <strong>Show what I am playing</strong>
-                  <span>Off by default. Only you control this; it is per account.</span>
-                </span>
-                <input
-                  className={styles.toggleInput}
-                  type="checkbox"
-                  checked={presenceSettings.enabled}
-                  disabled={presenceBusy}
-                  onChange={(event) =>
-                    void savePresence({ ...presenceSettings, enabled: event.target.checked })}
-                />
-                <span className={styles.toggle} aria-hidden="true" />
-              </label>
-
-              <label className={styles.toggleRow}>
-                <span className={styles.toggleDescription}>
-                  <strong>Show the platform name</strong>
-                  <span>Adds "via OpenDeck" so friends know where it is playing.</span>
-                </span>
-                <input
-                  className={styles.toggleInput}
-                  type="checkbox"
-                  checked={presenceSettings.showPlatform}
-                  disabled={presenceBusy || !presenceSettings.enabled}
-                  onChange={(event) =>
-                    void savePresence({ ...presenceSettings, showPlatform: event.target.checked })}
-                />
-                <span className={styles.toggle} aria-hidden="true" />
-              </label>
-
-              <label className={styles.cacheSizeField}>
-                <span>Your status message</span>
-                <input
-                  type="text"
-                  maxLength={128}
-                  placeholder="Coding OpenDeck"
-                  value={presenceSettings.customMessage}
-                  disabled={presenceBusy || !presenceSettings.enabled}
-                  onChange={(event) =>
-                    setPresenceSettings({ ...presenceSettings, customMessage: event.target.value })}
-                  onBlur={() => void savePresence(presenceSettings)}
-                />
-                <span className={styles.toggleDescription}>
-                  Shown above the track. Leave blank for just the song.
-                </span>
-              </label>
-            </div>
-
-            {presenceError && <p className={styles.error}>{presenceError}</p>}
-          </section>
-
-          <section className={styles.card} aria-labelledby="secret-show-title">
-            <div className={styles.cardHeader}>
-              <div>
-                <h2 id="secret-show-title">Secret Show</h2>
-                <p>
-                  Songs on this list play freely but never reach Discord — your profile
-                  shows nothing playing while one is on. Right-click any song for a
-                  one-click toggle, or paste a link below.
-                </p>
-              </div>
-              <span className={styles.status}>
-                {secretTracks.length > 0 ? `${secretTracks.length} hidden` : "Empty"}
-              </span>
-            </div>
-
-            <div className={styles.settingsList}>
-              <div className={styles.localPlaylistsBlock}>
-                <div className={styles.localPlaylistHeader}>
-                  <span className={styles.toggleDescription}>
-                    <strong>Add a song</strong>
-                    <span>A YouTube link or an 11-character video id.</span>
-                  </span>
-                  <div className={styles.localPlaylistCreate}>
-                    <input
-                      type="text"
-                      value={secretInput}
-                      placeholder="https://music.youtube.com/watch?v=…"
-                      aria-label="Song link or video id to hide from Discord"
-                      disabled={secretBusy}
-                      onChange={(event) => setSecretInput(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void handleAddSecretTrack();
-                      }}
-                    />
-                    <button
-                      className={styles.secondaryButton}
-                      type="button"
-                      disabled={secretBusy || !secretInput.trim()}
-                      onClick={() => void handleAddSecretTrack()}
-                    >
-                      <IconEyeOff size={18} />
-                      Hide it
-                    </button>
-                  </div>
-                </div>
-
-                {secretError && <p className={styles.error}>{secretError}</p>}
-
-                {secretTracks.length > 0 ? (
-                  <div className={styles.localPlaylistList}>
-                    {secretTracks.map((secret) => (
-                      <div className={styles.localPlaylistItem} key={secret.videoId}>
-                        <div className={styles.localPlaylistTitleRow}>
-                          <span className={styles.localPlaylistTitle}>
-                            <IconEyeOff size={18} aria-hidden="true" />
-                            {secret.title}
-                          </span>
-                          <button
-                            className={styles.dangerButton}
-                            type="button"
-                            disabled={secretBusy}
-                            onClick={() => void handleRemoveSecretTrack(secret.videoId)}
-                          >
-                            <IconTrash size={18} />
-                            Show again
-                          </button>
-                        </div>
-                        <span className={styles.toggleDescription}>
-                          <span>
-                            {secret.artist ? `${secret.artist} · ` : ""}{secret.videoId}
-                          </span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <span className={styles.toggleDescription}>
-                    <span>Nothing hidden yet.</span>
-                  </span>
-                )}
-              </div>
-            </div>
-          </section>
 
           <section className={styles.card} aria-labelledby="about-settings-title">
             <div className={styles.compactHeader}>

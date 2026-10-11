@@ -28,7 +28,6 @@ function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     totpIssuer: "OpenDeck",
     trustProxy: false,
     serveClient: false,
-    discordClientId: null,
     ...overrides,
   };
 }

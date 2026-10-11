@@ -3,7 +3,6 @@ import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
-import { DiscordRpcService } from "./DiscordRPC";
 import {
   readPlaybackSettings,
   savePlaybackSettings,
@@ -41,7 +40,6 @@ export interface PlayerSession {
 }
 
 type Listener = () => void;
-const DISCORD_ASSET_URL_LIMIT = 256;
 const SCROBBLE_TICK_MS = 10_000;
 
 function getErrorMessage(error: unknown): string {
@@ -57,48 +55,6 @@ function normalizePlaybackOrderMode(mode: unknown): PlaybackOrderMode {
   if (mode === "shuffle") return "shuffle";
   if (mode === "repeat-one" || mode === "repeat-all") return "repeat-one";
   return "in-order";
-}
-
-function getYouTubeMusicTrackUrl(track: Track): string | undefined {
-  if (track.source !== "youtube" || !track.id) return undefined;
-  return `https://music.youtube.com/watch?v=${encodeURIComponent(track.id)}`;
-}
-
-function getYouTubeMusicArtistUrl(track: Track): string | undefined {
-  if (track.source !== "youtube") return undefined;
-
-  const artistId = track.artists?.find((artist) => artist.id)?.id;
-  if (!artistId) return undefined;
-
-  const encodedId = encodeURIComponent(artistId);
-  return artistId.startsWith("UC")
-    ? `https://music.youtube.com/channel/${encodedId}`
-    : `https://music.youtube.com/browse/${encodedId}`;
-}
-
-function getYouTubeMusicAlbumUrl(track: Track): string | undefined {
-  if (track.source !== "youtube" || !track.album) return undefined;
-
-  const query = `${track.album} ${track.artist}`.trim();
-  if (!query) return undefined;
-
-  return `https://music.youtube.com/search?q=${encodeURIComponent(query)}`;
-}
-
-function getDiscordArtworkUrl(track: Track): string | undefined {
-  // For YouTube tracks, always prefer the i.ytimg.com thumbnail URL since
-  // Google CDN URLs (lh3.googleusercontent.com, yt3.ggpht.com) are frequently
-  // blocked by Discord's image fetcher due to hotlink protection.
-  if (track.source === "youtube" && /^[A-Za-z0-9_-]{11}$/.test(track.id)) {
-    return `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`;
-  }
-
-  // For non-YouTube tracks, use the artwork URL directly if available and within limits
-  if (track.artworkUrl && track.artworkUrl.length <= DISCORD_ASSET_URL_LIMIT) {
-    return track.artworkUrl;
-  }
-
-  return track.artworkUrl;
 }
 
 export class PlayerController {
@@ -965,48 +921,6 @@ export class PlayerController {
   private emit() {
     for (const listener of this.listeners) {
       listener();
-    }
-    
-    // Update Discord RPC presence
-    this.updateDiscordPresence();
-  }
-
-  private updateDiscordPresence() {
-    const currentTrack = this.state.currentTrack;
-    logInternalDebug("updateDiscordPresence", { status: this.state.status, hasTrack: !!currentTrack });
-    
-    // Clear presence if idle or error
-    if (this.state.status === "idle" || this.state.status === "error" || !currentTrack) {
-      logInternalDebug("Discord.clearPresence", {});
-      void DiscordRpcService.clearPresence();
-      return;
-    }
-
-    // Update presence with current track info
-    if (this.state.status === "playing" || this.state.status === "paused") {
-      const currentTime = this.loadedTrackId === currentTrack.id 
-        ? this.audioEngine.getCurrentTime() 
-        : (this.pendingSeekTime ?? 0);
-
-      logInternalDebug("Discord.updatePresence", {
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        status: this.state.status,
-      });
-
-      void DiscordRpcService.updatePresence({
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        album: currentTrack.album ?? "",
-        artworkUrl: getDiscordArtworkUrl(currentTrack),
-        songUrl: getYouTubeMusicTrackUrl(currentTrack),
-        videoId: currentTrack.id,
-        artistUrl: getYouTubeMusicArtistUrl(currentTrack),
-        albumUrl: getYouTubeMusicAlbumUrl(currentTrack),
-        duration: Math.floor(currentTrack.durationSec ?? 0),
-        currentTime: Math.floor(Math.max(0, currentTime)),
-        isPlaying: this.state.status === "playing",
-      });
     }
   }
 

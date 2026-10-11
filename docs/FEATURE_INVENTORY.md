@@ -10,10 +10,10 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
   - `sign_in_youtube_music` — opens a native webview at the Google login URL, polls for SAPISID cookies, saves them.
   - Disk LRU cache (`cache_*`), durable app settings (`app_setting_*`).
   - Local audio scan/read, audio source fetch (with Range), downloads to disk.
-  - Last.fm API (token/auth/scrobble), Discord RPC, Windows/macOS media keys, tray, updater.
+  - Last.fm API (token/auth/scrobble), Windows/macOS media keys, tray, updater.
 - **Frontend** (all reusable, runs in a webview today):
   - `datasource/` — abstract `DataSource` + `YouTubeMusicDataSource` (4.6k LOC: search, suggestions, artist/album/playlist pages, library, likes, subscriptions, recommendations, lyrics via LRCLIB/BetterLyrics/YouTube transcripts, stream resolution with quality selection, play reporting, po-token attestation).
-  - `player/` — `AudioEngine` (YouTube IFrame API + native `<audio>` fallback), `PlayerController` (state machine, queue navigation, autoplay radio, repeat/shuffle, scrobble ticks), `Queue` (manual vs automatic queue semantics), `TabManager` (multiple independent player tabs), `LibraryController` (sign-in/refresh state machine with optimistic like/save), `SearchController` (stream-sorted results), `localPlaylists`, `LastFm` (threshold logic), `DiscordRPC`, `useMediaSession` (browser Media Session API + native), `appSession` persistence (localStorage).
+  - `player/` — `AudioEngine` (YouTube IFrame API + native `<audio>` fallback), `PlayerController` (state machine, queue navigation, autoplay radio, repeat/shuffle, scrobble ticks), `Queue` (manual vs automatic queue semantics), `TabManager` (multiple independent player tabs), `LibraryController` (sign-in/refresh state machine with optimistic like/save), `SearchController` (stream-sorted results), `localPlaylists`, `LastFm` (threshold logic), `useMediaSession` (browser Media Session API + native), `appSession` persistence (localStorage).
   - `ui/` — tab-based navigation (home/album/artist/playlist/search/settings per tab), Sidebar, SearchOverlay (Ctrl+K), PlayerBar/ExpandedPlayer, QueuePanel, LyricsView, Track/Playlist context menus (Ctrl+S), MagicDice recommendation wheel, Onboarding, error toasts, themes, keyboard shortcuts, settings pages.
 
 ## Feature-by-feature inventory
@@ -40,7 +40,6 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 | 17 | Play reports (watchtime stats ping) | `beginPlayReport/updatePlayReport` | `pagestats` via proxy | Reuse (Bearer injected when signed in) | Reuse |
 | 18 | Downloads (downloader plugin: queue, progress, folder listing) | `downloaderStore` + Rust `download_audio_*` | googlevideo streams → disk | **Intentionally changed:** save-to-disk removed (browser apps must not hand audio to the OS download manager). Offline *playback* kept: the same store caches bytes in IndexedDB, a playlist-level "make available offline" button and per-track status badge remain, and the queue/progress popover was relabelled "Offline audio". | **Changed** |
 | 19 | Last.fm (auth, now-playing, scrobble thresholds) | `LastFm.ts` logic + Rust `lastfm_*` (md5 api_sig) | ws.audioscrobbler.com | **Removed entirely** in the web app: UI section, client service, server routes, `lastfm_sessions` table (dropped by migration), and env config all deleted. | **Removed** |
-| 20 | Discord RPC | Rust `discord_rpc_*` | Discord IPC (desktop only) | **Cannot be reproduced in a browser** (Discord Rich Presence requires local IPC). Settings section removed; documented. | N/A (documented) |
 | 21 | Media Session / OS media keys | `useMediaSession.ts` (browser Media Session API branch + Windows native branch) | navigator.mediaSession | Browser branch reused as-is; native branch unreachable (`isTauri()` false) | Reuse |
 | 22 | Synced lyrics view + lyrics button | `LyricsView`, `LyricsButton` | — | Reuse | Reuse |
 | 23 | Queue panel (reorder, remove, click-to-play) | `QueuePanel` + Queue ops | — | Reuse | Reuse |
@@ -73,7 +72,6 @@ Source of truth: `../JustAnotherMusicClient` (Tauri desktop YouTube Music client
 
 ## Explicitly not reproducible on the web (documented in README)
 
-- Discord Rich Presence (requires local Discord IPC).
 - Native OS window chrome: tray, autostart, window geometry, minimize-to-tray, native title bar buttons, native Windows/macOS media-key integration (browser Media Session covers OS media keys).
 - Auto-update + release changelog modal (web deployments are updated server-side).
 - Mini player as separate OS window (browser equivalent: Media Session + player bar; Document PiP is a possible future enhancement).

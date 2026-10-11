@@ -326,11 +326,28 @@ html[data-paper-pc] *::after {
   transition: none !important;
   box-shadow: none !important;
   scroll-behavior: auto !important;
+  filter: none !important;
 }
 
-html[data-paper-pc]:not([data-platform-linux]) *,
-html[data-paper-pc]:not([data-platform-linux]) *::before,
-html[data-paper-pc]:not([data-platform-linux]) *::after,
+html[data-paper-pc] *:not(input):not(textarea):not(select):not([contenteditable="true"]),
+html[data-paper-pc] *:not(input):not(textarea):not(select):not([contenteditable="true"])::before,
+html[data-paper-pc] *:not(input):not(textarea):not(select):not([contenteditable="true"])::after {
+  text-shadow: none !important;
+}
+
+/* Skip the costly Matrix rain backdrop even though its animation is disabled. */
+html[data-paper-pc] [data-theme-backdrop] {
+  display: none !important;
+}
+
+html[data-paper-pc] *,
+html[data-paper-pc] *::before,
+html[data-paper-pc] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Linux keeps the existing blur-free rendering path. */
 html[data-platform-linux] *,
 html[data-platform-linux] *::before,
 html[data-platform-linux] *::after {

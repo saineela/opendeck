@@ -1,6 +1,11 @@
 import { useSyncExternalStore } from "react";
 import matrixThemeCss from "../themes/matrix.css?raw";
-import { refreshAuthSession } from "../../auth/authClient";
+import {
+  getAuthSnapshot,
+  refreshAuthSession,
+  subscribeAuth,
+  type AuthSession,
+} from "../../auth/authClient";
 import {
   hydrateLocalJsonSetting,
   readLocalJsonSetting,
@@ -101,6 +106,7 @@ let glassThemeSettingsSnapshot = DEFAULT_GLASS_THEME_SETTINGS;
 let matrixThemeSettingsSnapshot = DEFAULT_MATRIX_THEME_SETTINGS;
 let themeUsername = "user";
 let themeUsernameLoadPromise: Promise<void> | null = null;
+let themeAuthUnsubscribe: (() => void) | null = null;
 /**
  * The admin's instance theme, adopted when this account has not chosen its
  * own. Fetched with the session, so the sign-in page (which has no account)
@@ -268,28 +274,39 @@ function isCustomCss(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function syncThemeFromSession(session: AuthSession): void {
+  const nextUsername = session.authenticated
+    ? sanitizeThemeUsername(session.user?.name ?? "user")
+    : "user";
+  const usernameChanged = themeUsername !== nextUsername;
+  if (usernameChanged) themeUsername = nextUsername;
+
+  // A signed-out placeholder (e.g. after logout) has no instance theme in
+  // memory. Preserve the last server-provided default in that case so /login
+  // keeps its theme; authenticated sessions can explicitly clear it.
+  const hasInstanceThemeValue = session.instanceTheme !== null || session.authenticated;
+  const nextInstanceTheme = isAppTheme(session.instanceTheme)
+    ? session.instanceTheme
+    : null;
+  const instanceChanged = hasInstanceThemeValue && instanceThemeSnapshot !== nextInstanceTheme;
+  if (instanceChanged) instanceThemeSnapshot = nextInstanceTheme;
+
+  if (usernameChanged || instanceChanged) {
+    applyAppTheme();
+    dispatchAppThemeChange();
+  }
+}
+
 function hydrateThemeUsername() {
+  if (!themeAuthUnsubscribe) {
+    themeAuthUnsubscribe = subscribeAuth(() => syncThemeFromSession(getAuthSnapshot()));
+  }
   if (themeUsernameLoadPromise) return;
 
-  // Desktop used the OS username; on the web the signed-in account name is
-  // the closest equivalent, falling back to "user". The same session call
-  // carries the admin's instance theme, so both land together.
+  // Keep both username-dependent custom CSS and the instance default in sync
+  // with later session refreshes, not just the first app boot.
   themeUsernameLoadPromise = refreshAuthSession()
-    .then((session) => {
-      const nextUsername = sanitizeThemeUsername(session.user?.name ?? "user");
-      const nextInstanceTheme = isAppTheme(session.instanceTheme)
-        ? session.instanceTheme
-        : null;
-      const usernameChanged = themeUsername !== nextUsername;
-      const instanceChanged = instanceThemeSnapshot !== nextInstanceTheme;
-
-      if (usernameChanged) themeUsername = nextUsername;
-      if (instanceChanged) instanceThemeSnapshot = nextInstanceTheme;
-      if (usernameChanged || instanceChanged) {
-        applyAppTheme();
-        dispatchAppThemeChange();
-      }
-    })
+    .then(syncThemeFromSession)
     .catch((error) => {
       logInternalWarn("theme username load failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -449,10 +466,12 @@ export function applyAppTheme(theme = readAppTheme()) {
 }
 
 export async function hydrateAppTheme() {
-  await hydrateLocalJsonSetting(STORAGE_KEY, isAppTheme);
-  await hydrateLocalJsonSetting(GLASS_SETTINGS_STORAGE_KEY, isGlassThemeSettings);
-  await hydrateLocalJsonSetting(MATRIX_SETTINGS_STORAGE_KEY, isMatrixThemeSettings);
-  await hydrateLocalJsonSetting(CUSTOM_CSS_STORAGE_KEY, isCustomCss);
+  await Promise.all([
+    hydrateLocalJsonSetting(STORAGE_KEY, isAppTheme),
+    hydrateLocalJsonSetting(GLASS_SETTINGS_STORAGE_KEY, isGlassThemeSettings),
+    hydrateLocalJsonSetting(MATRIX_SETTINGS_STORAGE_KEY, isMatrixThemeSettings),
+    hydrateLocalJsonSetting(CUSTOM_CSS_STORAGE_KEY, isCustomCss),
+  ]);
   applyAppTheme();
   dispatchAppThemeChange();
   window.dispatchEvent(new Event(GLASS_SETTINGS_CHANGE_EVENT));
@@ -460,8 +479,8 @@ export async function hydrateAppTheme() {
 }
 
 export function setAppTheme(theme: AppTheme) {
-  writeLocalJsonSetting(STORAGE_KEY, theme);
   applyAppTheme(theme);
+  writeLocalJsonSetting(STORAGE_KEY, theme);
   dispatchAppThemeChange();
 }
 
@@ -481,8 +500,8 @@ export function setMatrixThemeSettings(settings: Partial<MatrixThemeSettings>) {
     ...settings,
   });
   matrixThemeSettingsSnapshot = nextSettings;
-  writeLocalJsonSetting(MATRIX_SETTINGS_STORAGE_KEY, nextSettings);
   applyMatrixThemeSettings(nextSettings);
+  writeLocalJsonSetting(MATRIX_SETTINGS_STORAGE_KEY, nextSettings);
   window.dispatchEvent(new Event(MATRIX_SETTINGS_CHANGE_EVENT));
 }
 
@@ -492,8 +511,8 @@ export function setGlassThemeSettings(settings: Partial<GlassThemeSettings>) {
     ...settings,
   });
   glassThemeSettingsSnapshot = nextSettings;
-  writeLocalJsonSetting(GLASS_SETTINGS_STORAGE_KEY, nextSettings);
   applyGlassThemeSettings(nextSettings);
+  writeLocalJsonSetting(GLASS_SETTINGS_STORAGE_KEY, nextSettings);
   window.dispatchEvent(new Event(GLASS_SETTINGS_CHANGE_EVENT));
 }
 
