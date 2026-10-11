@@ -240,6 +240,22 @@ describe("server integration", () => {
     expect(csp).toContain("object-src 'none'");
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    // This instance is configured for plain HTTP. Upgrading subresources to
+    // https:// would break the SPA bundles, and HSTS would pin the origin.
+    expect(csp).not.toContain("upgrade-insecure-requests");
+    expect(res.headers.get("strict-transport-security")).toBeNull();
+  });
+
+  it("keeps HTTPS-only hardening when the instance is served over TLS", async () => {
+    const tls = await startApp(testConfig({ APP_URL: "https://opendeck.example" }), db);
+    try {
+      const res = await fetch(`${tls.base}/healthz`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-security-policy") ?? "").toContain("upgrade-insecure-requests");
+      expect(res.headers.get("strict-transport-security") ?? "").toContain("max-age=31536000");
+    } finally {
+      await tls.close();
+    }
   });
 
   describe("CSRF origin check", () => {

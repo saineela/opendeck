@@ -103,6 +103,17 @@ export function createApp(config: ServerConfig, db: Db): Express {
   const app = express();
   if (config.trustProxy) app.set("trust proxy", 1);
 
+  // Self-hosting usually means plain HTTP on a LAN address (http://192.168.x.y:4000),
+  // and two helmet defaults actively break that deployment:
+  //   * `upgrade-insecure-requests` makes the browser rewrite every subresource
+  //     (the JS and CSS bundles) to https://<same-host>. Nothing answers on TLS,
+  //     so both fail and the SPA paints an empty page behind an HTML title.
+  //   * HSTS would pin the origin to HTTPS for a year on a host with no TLS
+  //     listener, so the instance could not be reached again from that browser.
+  // Enable them only when APP_URL says the instance really is served over TLS
+  // (a domain behind a reverse proxy, or a TLS-terminating tunnel).
+  const servedOverTls = config.appUrl.startsWith("https://");
+
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -136,10 +147,13 @@ export function createApp(config: ServerConfig, db: Db): Express {
           baseUri: ["'self'"],
           formAction: ["'self'"],
           frameAncestors: ["'self'"],
+          ...(servedOverTls ? {} : { upgradeInsecureRequests: null }),
         },
       },
       crossOriginEmbedderPolicy: false,
       referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+      // See `servedOverTls` above: HSTS is meaningless (and harmful) over HTTP.
+      ...(servedOverTls ? {} : { strictTransportSecurity: false }),
     }),
   );
 
