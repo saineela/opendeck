@@ -11,6 +11,8 @@
 
 A **self-hosted, multi-user** music client for YouTube Music, built with React, TypeScript, Express, and SQLite — for **Windows, macOS & Linux** through any browser.
 
+OpenDeck is an independent open-source software project intended for development, experimentation, and self-hosted use. Users are responsible for ensuring that their use of the software and any third-party content complies with applicable laws and service terms.
+
 <br>
 
 > **IMPORTANT** OpenDeck is an independent, unofficial project. It is not affiliated with, authorized by, sponsored by, or endorsed by YouTube or Google — nor by the JustAnotherMusicClient project it adapts. OpenDeck is a **web-based adaptation** of [JustAnotherMusicClient](https://github.com/2latemc/JustAnotherMusicClient), an open-source desktop YouTube Music client. It builds on the upstream project's functionality and design while adding a React and TypeScript web interface, a server-side architecture, multi-user accounts, authentication, an HTTP API, and further features. Upstream is Apache-2.0, which permits this kind of modification and redistribution with attribution — see [Credits and license](#credits-and-license).
