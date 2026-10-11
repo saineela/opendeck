@@ -258,9 +258,10 @@ overrides the `OAUTH_*` env), the public account-creation switch
 (`registration.enabled` in `instance_config`, overrides
 `ALLOW_REGISTRATION` — closed means `/register` 403s, the sign-up option
 vanishes from `/login`, and unknown OIDC identities can no longer mint
-accounts; existing accounts and the first-run exemption are unaffected),
-and the instance data reset.
-- **The reset (`POST /api/admin/reset`)** wipes durable settings + cache
+accounts; existing accounts and the first-run exemption are unaffected.
+Password sign-in is controlled separately by `PASSWORD_LOGIN_ENABLED`.
+
+- **The instance data reset (`POST /api/admin/reset`)** wipes durable settings + cache
 and signs everyone out except the acting admin — and only after that
 admin re-proves TOTP (403 otherwise), so a hijacked session alone cannot
 destroy data.

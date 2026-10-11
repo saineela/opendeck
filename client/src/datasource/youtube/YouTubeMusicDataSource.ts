@@ -29,6 +29,7 @@ import type {
 } from "../types";
 import { collectArtworkCandidates, getVideoArtworkFallback, selectArtworkUrl } from "./artwork";
 import { mintPoToken } from "./poToken";
+import { createCachedPlaylistFallback } from "./playlistTrackCache";
 import { tauriFetch } from "./tauriFetch";
 import {
   getStreamingQuality,
@@ -1791,6 +1792,23 @@ export class YouTubeMusicDataSource extends DataSource {
     return merged;
   }
 
+  private async getCachedPlaylistFallback(
+    playlistId: string,
+    cachedTracks?: Track[] | null,
+    onUpdate?: (page: TrackPage) => void,
+  ): Promise<TrackPage | null> {
+    const tracks = cachedTracks ?? await getCachedJson<Track[]>(this.getPlaylistTrackCacheKey(playlistId));
+    const page = createCachedPlaylistFallback(tracks);
+    if (!page) return null;
+
+    onUpdate?.(page);
+    logInternalWarn("YouTubeMusicDataSource.getCachedPlaylistFallback using cached playlist", {
+      playlistId,
+      trackCount: page.tracks.length,
+    });
+    return page;
+  }
+
   private getAlbumHeaderArtwork(response: unknown): string | undefined {
     const parsed = response as ParsedMusicResponse;
     const detailHeader = parsed.contents_memo?.getType(YTNodes.MusicDetailHeader)?.[0] as {
@@ -3140,7 +3158,6 @@ export class YouTubeMusicDataSource extends DataSource {
     if (cachedTracks?.length) {
       onUpdate?.({ tracks: cachedTracks, hasMore: false });
     }
-    const client = await this.getMusicClient();
     let page: YouTubeMusicPlaylistPage;
     let sessionKey = pageKey;
     let seenTrackIds = new Set<string>();
@@ -3153,7 +3170,8 @@ export class YouTubeMusicDataSource extends DataSource {
           playlistId: playlist.id,
           pageKey,
         });
-        return { tracks: [], hasMore: false };
+        return (await this.getCachedPlaylistFallback(playlist.id, null, onUpdate))
+          ?? { tracks: [], hasMore: false };
       }
 
       if (!session.playlistPage.has_continuation) {
@@ -3173,12 +3191,25 @@ export class YouTubeMusicDataSource extends DataSource {
             playlistId: playlist.id,
             error: error instanceof Error ? error.message : String(error),
           });
-          return { tracks: [], hasMore: false };
+          return (await this.getCachedPlaylistFallback(playlist.id, null, onUpdate))
+            ?? { tracks: [], hasMore: false };
         }
         tracks = this.collectParsedPlaylistPageTracks(page, seenTrackIds);
       }
     } else {
-      page = await client.music.getPlaylist(playlist.id) as YouTubeMusicPlaylistPage;
+      let client: Innertube;
+      try {
+        client = await this.getMusicClient();
+        page = await client.music.getPlaylist(playlist.id) as YouTubeMusicPlaylistPage;
+      } catch (error) {
+        logInternalWarn("YouTubeMusicDataSource.getPlaylistTrackPage request failed", {
+          playlistId: playlist.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        const fallback = await this.getCachedPlaylistFallback(playlist.id, cachedTracks, onUpdate);
+        if (fallback) return fallback;
+        throw error;
+      }
       if (cachedTracks?.length) {
         seenTrackIds = new Set(cachedTracks.map((track) => track.id));
         const freshTracks = this.collectParsedPlaylistPageTracks(page, seenTrackIds);
@@ -3194,14 +3225,24 @@ export class YouTubeMusicDataSource extends DataSource {
         logInternalWarn("YouTubeMusicDataSource.getPlaylistTrackPage verifying empty first page", {
           playlistId: playlist.id,
         });
-        const fallbackTracks = await this.collectPlaylistTracksWithEmptyRetries(
-          client,
-          playlist.id,
-          "paged-first-load",
-        );
-        if (fallbackTracks.length > 0) {
-          const cachedFallbackTracks = await this.cachePlaylistTracks(playlist.id, fallbackTracks);
-          return { tracks: cachedFallbackTracks, hasMore: false };
+        try {
+          const fallbackTracks = await this.collectPlaylistTracksWithEmptyRetries(
+            client,
+            playlist.id,
+            "paged-first-load",
+          );
+          if (fallbackTracks.length > 0) {
+            const cachedFallbackTracks = await this.cachePlaylistTracks(playlist.id, fallbackTracks);
+            return { tracks: cachedFallbackTracks, hasMore: false };
+          }
+        } catch (error) {
+          logInternalWarn("YouTubeMusicDataSource.getPlaylistTrackPage empty-page verification failed", {
+            playlistId: playlist.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          const fallback = await this.getCachedPlaylistFallback(playlist.id, cachedTracks, onUpdate);
+          if (fallback) return fallback;
+          throw error;
         }
       }
     }
@@ -3248,11 +3289,23 @@ export class YouTubeMusicDataSource extends DataSource {
       this.playlistRefreshPromises.set(playlist.id, refresh);
     }
 
-    const value = await refresh;
-    const changed = value.length > 0
-      ? await setCachedJson(cacheKey, value)
-      : false;
-    return { changed, value };
+    try {
+      const value = await refresh;
+      const changed = value.length > 0
+        ? await setCachedJson(cacheKey, value)
+        : false;
+      return { changed, value };
+    } catch (error) {
+      const fallback = await this.getCachedPlaylistFallback(playlist.id);
+      if (fallback) {
+        logInternalWarn("YouTubeMusicDataSource.refreshPlaylistTracks using cache after request failure", {
+          playlistId: playlist.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return { changed: false, value: fallback.tracks };
+      }
+      throw error;
+    }
   }
 
   private async fetchPlaylistTracksFresh(playlist: Playlist): Promise<Track[]> {

@@ -24,9 +24,9 @@ const config = loadConfig();
 
 // Self-hosting sanity checks — misconfiguration here is silent until someone
 // tries to sign in, so surface it at boot instead.
-if (!config.google.configured && !config.registration.enabled) {
+if (!config.google.configured && !config.passwordLoginEnabled) {
   logger.warn("server.no_sign_in_method", {
-    hint: "Enable registration (ALLOW_REGISTRATION=1) or configure GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET.",
+    hint: "Enable password sign-in (PASSWORD_LOGIN_ENABLED=1) or configure GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET.",
   });
 }
 if (

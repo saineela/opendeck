@@ -227,7 +227,7 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
       role,
       /** True while the instance has no accounts: show first-run setup. */
       needsSetup: user ? false : userCount(db) === 0,
-      passwordLoginEnabled: config.registration.enabled,
+      passwordLoginEnabled: config.passwordLoginEnabled,
       // Public account creation: env baseline overridden by the admin
       // panel's runtime switch. The login page hides its "Create an
       // account" affordance when this is false.
@@ -341,7 +341,7 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
    * exchanges for the session. The password is never re-sent.
    */
   router.post("/login", loginLimit, async (req: Request, res: Response) => {
-    if (!config.registration.enabled) {
+    if (!config.passwordLoginEnabled) {
       jsonError(res, 403, "Password sign-in is disabled on this server.");
       return;
     }
@@ -405,7 +405,7 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
 
   /** Step 2: completes a password sign-in that requires a TOTP code. */
   router.post("/login/totp", loginLimit, totpLimit, (req: Request, res: Response) => {
-    if (!config.registration.enabled) {
+    if (!config.passwordLoginEnabled) {
       jsonError(res, 403, "Password sign-in is disabled on this server.");
       return;
     }

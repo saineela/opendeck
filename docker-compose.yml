@@ -24,8 +24,8 @@ services:
       # Signs session/OAuth state cookies and encrypts stored YouTube tokens.
       # Required: compose refuses to start without it.
       APP_SECRET: ${APP_SECRET:?Set APP_SECRET in .env — generate with: openssl rand -hex 32}
-      # Accounts. Registration is on by default so the first user can sign up;
-      # set ALLOW_REGISTRATION=false afterwards to close the doors.
+      # Password login and account creation can be disabled independently.
+      PASSWORD_LOGIN_ENABLED: ${PASSWORD_LOGIN_ENABLED:-true}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       INVITE_CODE: ${INVITE_CODE:-}
       # Optional Google Sign-In (leave empty to run password-only auth).

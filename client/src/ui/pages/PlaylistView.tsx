@@ -173,7 +173,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       const uniqueNewTracks = getUniqueNewTracks(tracksRef.current, page.tracks);
       setEnteringTrackKeys(new Set(uniqueNewTracks.map(getTrackKey)));
       if (uniqueNewTracks.length > 0) {
-        setTracks((current) => [...current, ...uniqueNewTracks]);
+        const updatedTracks = [...tracksRef.current, ...uniqueNewTracks];
+        tracksRef.current = updatedTracks;
+        setTracks(updatedTracks);
       }
       setHasMoreTracks(page.hasMore);
       setNextPageKey(page.nextPageKey);
@@ -634,10 +636,10 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           <div ref={loadMoreRef} className={styles.loadMoreStatus} aria-live="polite">
             {isLoadingMore ? (
               <PlaylistLoadingSpinner label="Loading more songs" />
-            ) : loadMoreError ? (
-              loadMoreError
             ) : hasMoreTracks ? (
-              ""
+              <button type="button" onClick={() => void loadMoreTracks()}>
+                {loadMoreError ? "Retry loading songs" : "Load more songs"}
+              </button>
             ) : (
               ""
             )}

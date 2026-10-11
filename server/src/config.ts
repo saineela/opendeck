@@ -24,6 +24,7 @@ export interface ServerConfig {
     enabled: boolean;
     inviteCode: string | null;
   };
+  passwordLoginEnabled: boolean;
   /** Shown as the issuer in authenticator-app TOTP entries. */
   totpIssuer: string;
   trustProxy: boolean;
@@ -115,6 +116,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       enabled: env.ALLOW_REGISTRATION !== "0" && env.ALLOW_REGISTRATION !== "false",
       inviteCode: env.INVITE_CODE?.trim() || null,
     },
+    passwordLoginEnabled: env.PASSWORD_LOGIN_ENABLED !== "0" && env.PASSWORD_LOGIN_ENABLED !== "false",
     totpIssuer: env.TOTP_ISSUER?.trim() || "OpenDeck",
     trustProxy: env.TRUST_PROXY === "1" || env.TRUST_PROXY === "true",
     serveClient: env.SERVE_CLIENT !== "0",

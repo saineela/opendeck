@@ -137,25 +137,75 @@ describe("registration", () => {
 });
 
 describe("registration controls", () => {
-  it("honours ALLOW_REGISTRATION=0 for both sign-up and sign-in", async () => {
+  it("keeps first-run setup open, then closes new sign-ups but allows password sign-in", async () => {
     await withApp({ ALLOW_REGISTRATION: "0" }, async ({ running }) => {
-      // First-run setup stays open so the instance can be bootstrapped
-      // even with registration closed…
       const setup = await register(running.base, {
         email: "owner@example.com",
         password: GOOD_PASSWORD,
       });
       expect(setup.status).toBe(201);
 
-      // …but every later sign-up is refused.
-      const res = await register(running.base, { email: "x@example.com", password: GOOD_PASSWORD });
-      expect(res.status).toBe(403);
+      const denied = await register(running.base, { email: "x@example.com", password: GOOD_PASSWORD });
+      expect(denied.status).toBe(403);
 
       const login = await jsonPost(running.base, "/api/auth/login", {
-        email: "x@example.com",
+        email: "owner@example.com",
+        password: GOOD_PASSWORD,
+      });
+      expect(login.status).toBe(200);
+      expect(await login.json()).toMatchObject({ status: "ok", user: { email: "owner@example.com" } });
+    });
+  });
+
+  it("does not allow a runtime registration override to disable password login", async () => {
+    await withApp({}, async ({ running }) => {
+      const setup = await register(running.base, {
+        email: "owner@example.com",
+        password: GOOD_PASSWORD,
+      });
+      expect(setup.status).toBe(201);
+
+      const registration = await fetch(`${running.base}/api/admin/registration`, {
+        headers: { cookie: cookieHeader(setup) },
+      });
+      expect(registration.status).toBe(200);
+      const updated = await fetch(`${running.base}/api/admin/registration`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", cookie: cookieHeader(setup) },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(updated.status).toBe(200);
+
+      const denied = await register(running.base, { email: "x@example.com", password: GOOD_PASSWORD });
+      expect(denied.status).toBe(403);
+      const login = await jsonPost(running.base, "/api/auth/login", {
+        email: "owner@example.com",
+        password: GOOD_PASSWORD,
+      });
+      expect(login.status).toBe(200);
+    });
+  });
+
+  it("allows the dedicated setting to disable password sign-in independently", async () => {
+    await withApp({ PASSWORD_LOGIN_ENABLED: "0", ALLOW_REGISTRATION: "0" }, async ({ running }) => {
+      const setup = await register(running.base, {
+        email: "owner@example.com",
+        password: GOOD_PASSWORD,
+      });
+      expect(setup.status).toBe(201);
+
+      const login = await jsonPost(running.base, "/api/auth/login", {
+        email: "owner@example.com",
         password: GOOD_PASSWORD,
       });
       expect(login.status).toBe(403);
+      const totp = await jsonPost(running.base, "/api/auth/login/totp", {
+        challenge: "forged.deadbeef",
+        code: "123456",
+      });
+      expect(totp.status).toBe(403);
+      const session = await fetch(`${running.base}/api/auth/session`);
+      expect(await session.json()).toMatchObject({ passwordLoginEnabled: false, registrationEnabled: false });
     });
   });
 
@@ -306,6 +356,10 @@ describe("TOTP two-step verification", () => {
       const { backupCodes } = (await enabled.json()) as { backupCodes: string[] };
       expect(backupCodes).toHaveLength(10);
       expect(backupCodes[0]).toMatch(/^[0-9A-F]{5}-[0-9A-F]{5}$/);
+
+      // Password sign-in remains available when public registration is disabled.
+      db.prepare("INSERT INTO instance_config (key, value, updated_at) VALUES ('registration.enabled', '0', ?)")
+        .run(Date.now());
 
       // Password alone is no longer enough.
       const step1 = await jsonPost(running.base, "/api/auth/login", account);

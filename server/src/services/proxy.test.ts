@@ -25,6 +25,7 @@ function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     },
     adminEmails: [],
     registration: { enabled: true, inviteCode: null },
+    passwordLoginEnabled: true,
     totpIssuer: "OpenDeck",
     trustProxy: false,
     serveClient: false,

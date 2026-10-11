@@ -25,6 +25,7 @@ describe("loadConfig", () => {
     });
     expect(config.google.configured).toBe(false);
     expect(config.registration.enabled).toBe(true);
+    expect(config.passwordLoginEnabled).toBe(true);
   });
 
   it("requires APP_SECRET in production", () => {
@@ -76,6 +77,27 @@ describe("loadConfig", () => {
     const second = loadConfig(env);
     expect(first.appSecret).toHaveLength(32);
     expect(first.appSecret.equals(second.appSecret)).toBe(true);
+  });
+
+  it("configures password sign-in independently from registration", () => {
+    const closedRegistration = loadConfig({
+      NODE_ENV: "test",
+      APP_SECRET: "s".repeat(40),
+      DATA_DIR: tempDataDir(),
+      ALLOW_REGISTRATION: "0",
+    });
+    expect(closedRegistration.registration.enabled).toBe(false);
+    expect(closedRegistration.passwordLoginEnabled).toBe(true);
+
+    const disabledPasswordLogin = loadConfig({
+      NODE_ENV: "test",
+      APP_SECRET: "s".repeat(40),
+      DATA_DIR: tempDataDir(),
+      PASSWORD_LOGIN_ENABLED: "false",
+      ALLOW_REGISTRATION: "0",
+    });
+    expect(disabledPasswordLogin.registration.enabled).toBe(false);
+    expect(disabledPasswordLogin.passwordLoginEnabled).toBe(false);
   });
 
   it("parses scopes and flags", () => {

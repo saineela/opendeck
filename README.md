@@ -79,7 +79,7 @@ For development with hot reload:
 npm run dev
 ```
 
-Server configuration lives in environment variables (see `.env` and `webapp/server/src/config.ts`) — `APP_SECRET`, `ADMIN_EMAILS`, `OAUTH_*`, `ALLOW_REGISTRATION`, cache budgets, and more.
+Server configuration lives in environment variables (see `.env.example` and `server/src/config.ts`) — `APP_SECRET`, `ADMIN_EMAILS`, `OAUTH_*`, `PASSWORD_LOGIN_ENABLED`, `ALLOW_REGISTRATION`, cache budgets, and more.
 
 <p align="center">
   <img width="831px" src="assets/img/Screenshot01.png" alt="OpenDeck home screen" />
@@ -106,7 +106,7 @@ OpenDeck is a web app: it runs on **any OS** where Node.js or Docker runs — Wi
 
 - **Reverse proxy?** Set `TRUST_PROXY=1` so rate limits and lockouts see real client IPs.
 - **Backups** are simple: stop the container, copy the data directory (`app.db` holds everything).
-- **First-run setup**: visiting with zero accounts shows the admin creation screen; afterwards registration follows `ALLOW_REGISTRATION` and the admin panel switch.
+- **First-run setup**: visiting with zero accounts shows the admin creation screen; afterwards account creation follows `ALLOW_REGISTRATION` and the admin panel switch. Password sign-in for existing accounts is independent and can be disabled with `PASSWORD_LOGIN_ENABLED=false`.
 
 ## Disclaimer ⚠️
 

@@ -184,14 +184,16 @@ a session (401 otherwise). Same payload:
 | `youtubeLinked` | boolean | A valid YouTube Music token exists for this user |
 | `totpEnabled` | boolean | This account requires a second factor at sign-in |
 | `authProvider` | string \| null | `"password"` or `"google"`; null when signed out |
-| `passwordLoginEnabled` | boolean | Whether `POST /login` is open (`ALLOW_REGISTRATION`) |
-| `registrationEnabled` | boolean | Whether self-service sign-up is open — env baseline overridden by the admin panel's runtime switch (`PUT /api/admin/registration`) |
+| `passwordLoginEnabled` | boolean | Whether password sign-in (including the TOTP step) is open (`PASSWORD_LOGIN_ENABLED`) |
+| `registrationEnabled` | boolean | Whether self-service sign-up is open — `ALLOW_REGISTRATION` baseline overridden by the admin panel's runtime switch (`PUT /api/admin/registration`) |
 | `googleSignInEnabled` | boolean | A Google OAuth client is configured — show the button |
 | `inviteCodeRequired` | boolean | Registration demands an `inviteCode` |
 
 Branch on these flags instead of assuming a sign-in method: hide the Google
-button when `googleSignInEnabled` is false, and hide the sign-up form when
-`registrationEnabled` is false.
+button when `googleSignInEnabled` is false, hide the password form when
+`passwordLoginEnabled` is false (except during first-run setup), and hide the
+sign-up form when `registrationEnabled` is false. Closing registration never
+prevents existing password accounts from signing in.
 
 #### `POST /api/auth/register`
 
@@ -249,7 +251,7 @@ response is deliberately identical for an unknown email and a wrong password.
 |---|---|
 | **200** | Password accepted (`ok` or `totp_required`) |
 | **401** | Wrong password or unknown email (identical body) |
-| **403** | Password sign-in disabled on this server |
+| **403** | Password sign-in disabled (`PASSWORD_LOGIN_ENABLED=false`) |
 | **429** | 10 consecutive failures locked the account for 15 minutes, or the IP is rate-limited |
 
 #### `POST /api/auth/login/totp`
@@ -1569,7 +1571,8 @@ editing (dev `tsx watch` does not reload `.env`).
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `ALLOW_REGISTRATION` | no (`true`) | Baseline for `/register` and `/login`; the admin panel can override sign-up at runtime (`PUT /api/admin/registration`) |
+| `PASSWORD_LOGIN_ENABLED` | no (`true`) | Enables password sign-in and TOTP completion; independent of registration |
+| `ALLOW_REGISTRATION` | no (`true`) | Baseline for `/register`; the admin panel can override sign-up at runtime (`PUT /api/admin/registration`) |
 | `INVITE_CODE` | no | Required (constant-time) on `/register` |
 | `TOTP_ISSUER` | no (`OpenDeck`) | Issuer label in the authenticator app |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | no | Enables Google Sign-In (redirect URI = `{APP_URL}/api/auth/google/callback`) |

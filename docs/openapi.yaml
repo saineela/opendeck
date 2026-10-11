@@ -2618,8 +2618,8 @@ components:
         authProvider:
           type: [string, "null"]
           enum: [password, google, null]
-        passwordLoginEnabled: { type: boolean, description: "ALLOW_REGISTRATION — gates /register and /login" }
-        registrationEnabled: { type: boolean }
+        passwordLoginEnabled: { type: boolean, description: "PASSWORD_LOGIN_ENABLED gates password login and TOTP completion" }
+        registrationEnabled: { type: boolean, description: "ALLOW_REGISTRATION baseline with admin runtime override; gates new account creation only" }
         googleSignInEnabled: { type: boolean, description: A Google OAuth client is configured }
         inviteCodeRequired: { type: boolean }
         role:
