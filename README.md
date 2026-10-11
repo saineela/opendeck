@@ -111,6 +111,22 @@ OpenDeck is a web app: it runs on **any OS** where Node.js or Docker runs — Wi
 - **Backups** are simple: stop the container, copy the data directory (`app.db` holds everything).
 - **First-run setup**: visiting with zero accounts shows the admin creation screen; afterwards registration follows `ALLOW_REGISTRATION` and the admin panel switch.
 
+## Disclaimer ⚠️
+
+**How you use this software is entirely your choice — and your responsibility.**
+Whatever you do with OpenDeck, whoever you share it with, and wherever you run
+it is on you. The author is **not responsible** for how this software is used
+and accepts **no responsibility** for any legal situations, claims, penalties,
+or other issues that may arise from your use of this project.
+
+If you host OpenDeck **publicly**, be **extremely careful** about the Terms of
+Service of your hosting provider — and about YouTube's terms, which apply to
+what the software retrieves (see [Legal](#legal)). Check what your provider
+allows **before** you deploy: providers may throttle, suspend, or terminate
+accounts and services for the traffic or content this software can generate.
+The author is not responsible for consequences of hosting this project,
+including account or service termination by your provider.
+
 ## Legal
 
 ### What this software does with audio
