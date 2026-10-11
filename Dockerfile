@@ -49,6 +49,10 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 # Rendered as the public /docs API reference page.
 COPY --from=build /app/docs ./docs
+# Public env template — served as the /docs/.env.example companion page.
+COPY --from=build /app/.env.example ./
+# Apache-2.0 requires LICENSE and NOTICE to ship with a binary distribution.
+COPY --from=build /app/LICENSE /app/NOTICE ./
 
 # SQLite (and the generated dev secret, if ever created) live on a volume.
 RUN mkdir -p /data && chown -R node:node /app /data
