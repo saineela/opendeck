@@ -78,37 +78,37 @@
 }
 
 html[data-app-theme="light"] {
-  --bg: #f4f5f7;
-  --chrome: #f8f9fb;
+  --bg: #fbfcfe;
+  --chrome: #ffffff;
   --text: #15171a;
 
-  --color-bg: rgb(248 249 251 / 88%);
-  --color-bg-elevated: rgb(255 255 255 / 92%);
-  --color-bg-overlay: rgb(237 240 245 / 94%);
+  --color-bg: rgb(255 255 255 / 88%);
+  --color-bg-elevated: rgb(255 255 255 / 97%);
+  --color-bg-overlay: rgb(246 248 251 / 96%);
   --color-bg-subtle: rgb(24 30 38 / 5%);
   --color-bg-muted: rgb(24 30 38 / 7%);
 
   --color-text-primary: #15171a;
-  --color-text-secondary: #5d6673;
-  --color-text-muted: #8a94a3;
+  --color-text-secondary: #566070;
+  --color-text-muted: #6b7482;
   --color-text-on-accent: #ffffff;
   --color-text-inverted: #ffffff;
 
   --color-accent: #d7193f;
   --color-accent-hover: #b81434;
 
-  --color-border: rgb(24 30 38 / 13%);
-  --color-border-strong: rgb(24 30 38 / 22%);
+  --color-border: rgb(24 30 38 / 12%);
+  --color-border-strong: rgb(24 30 38 / 20%);
 
-  --color-app-backdrop: #eef1f5;
-  --color-window-chrome: rgb(248 249 251 / 88%);
-  --color-panel-chrome: rgb(255 255 255 / 86%);
-  --color-player-chrome: rgb(255 255 255 / 88%);
-  --color-backdrop-vignette: rgb(120 130 145 / 16%);
+  --color-app-backdrop: #f6f8fb;
+  --color-window-chrome: rgb(255 255 255 / 92%);
+  --color-panel-chrome: rgb(255 255 255 / 94%);
+  --color-player-chrome: rgb(255 255 255 / 94%);
+  --color-backdrop-vignette: rgb(120 130 145 / 12%);
   --color-control-hover: rgb(24 30 38 / 7%);
   --color-control-active: rgb(24 30 38 / 11%);
-  --color-slider-track: #c8ced8;
-  --color-slider-fill: #596272;
+  --color-slider-track: #d5dae2;
+  --color-slider-fill: #4d5666;
   --color-slider-thumb: #15171a;
   --shadow-panel: 0 14px 34px rgb(24 30 38 / 14%);
   --shadow-chrome: 0 14px 40px rgb(24 30 38 / 12%);
@@ -336,4 +336,337 @@ html[data-platform-linux] *::before,
 html[data-platform-linux] *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* ==========================================================================
+   Built-in theme palettes
+   Each theme is fully expressed through the shared custom properties above,
+   so every component follows the active theme automatically.
+   ========================================================================== */
+
+/* Sakura — soft cherry-blossom pastels (light) */
+html[data-app-theme="sakura"] {
+  --bg: #fdf5f8;
+  --chrome: #fff7fb;
+  --text: #3b2530;
+
+  --color-bg: rgb(255 251 253 / 92%);
+  --color-bg-elevated: rgb(255 253 254 / 97%);
+  --color-bg-overlay: rgb(255 246 250 / 96%);
+  --color-bg-subtle: rgb(214 108 148 / 8%);
+  --color-bg-muted: rgb(214 108 148 / 12%);
+
+  --color-text-primary: #3b2530;
+  --color-text-secondary: #8a5a6e;
+  --color-text-muted: #b58a9a;
+  --color-text-on-accent: #ffffff;
+  --color-text-inverted: #ffffff;
+
+  --color-accent: #e2557f;
+  --color-accent-hover: #c73e68;
+
+  --color-border: rgb(120 60 82 / 14%);
+  --color-border-strong: rgb(120 60 82 / 24%);
+
+  --color-app-backdrop: #fbeef4;
+  --color-window-chrome: rgb(255 250 252 / 94%);
+  --color-panel-chrome: rgb(255 252 254 / 95%);
+  --color-player-chrome: rgb(255 248 251 / 94%);
+  --color-backdrop-vignette: rgb(170 110 135 / 16%);
+  --color-control-hover: rgb(120 60 82 / 8%);
+  --color-control-active: rgb(120 60 82 / 13%);
+  --color-slider-track: #f0d3de;
+  --color-slider-fill: #c73e68;
+  --color-slider-thumb: #ffffff;
+  --shadow-panel: 0 14px 34px rgb(150 80 105 / 16%);
+  --shadow-chrome: 0 14px 40px rgb(150 80 105 / 12%);
+}
+
+html[data-app-theme="sakura"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 84% 8%, rgb(255 183 208 / 38%), transparent 34%),
+    radial-gradient(circle at 10% 88%, rgb(255 214 230 / 34%), transparent 36%),
+    linear-gradient(180deg, #fff7fb 0%, #fbeef4 100%);
+}
+
+/* Neon Tokyo — cyberpunk night markets (dark) */
+html[data-app-theme="tokyo"] {
+  --bg: #0b0416;
+  --chrome: #120722;
+  --text: #f4e9ff;
+
+  --color-bg: rgb(12 5 24 / 84%);
+  --color-bg-elevated: rgb(24 10 40 / 90%);
+  --color-bg-overlay: rgb(38 16 60 / 94%);
+  --color-bg-subtle: rgb(255 45 170 / 8%);
+  --color-bg-muted: rgb(6 2 12 / 42%);
+
+  --color-text-primary: #f6ecff;
+  --color-text-secondary: #9ad7f0;
+  --color-text-muted: #6f5a86;
+  --color-text-on-accent: #1a0320;
+  --color-text-inverted: #f6ecff;
+
+  --color-accent: #ff2d9a;
+  --color-accent-hover: #ff5cb3;
+
+  --color-border: rgb(255 45 170 / 20%);
+  --color-border-strong: rgb(57 224 255 / 34%);
+
+  --color-app-backdrop: #08030f;
+  --color-window-chrome: rgb(18 8 32 / 90%);
+  --color-panel-chrome: rgb(26 11 44 / 92%);
+  --color-player-chrome: rgb(14 6 26 / 92%);
+  --color-backdrop-vignette: rgb(0 0 0 / 62%);
+  --color-control-hover: rgb(57 224 255 / 10%);
+  --color-control-active: rgb(57 224 255 / 18%);
+  --color-slider-track: #2a1240;
+  --color-slider-fill: #39e0ff;
+  --color-slider-thumb: #ff8ac4;
+  --shadow-panel:
+    0 16px 36px rgb(0 0 0 / 52%),
+    0 0 22px rgb(255 45 170 / 12%);
+  --shadow-chrome:
+    0 14px 40px rgb(0 0 0 / 40%),
+    0 0 24px rgb(57 224 255 / 10%);
+}
+
+html[data-app-theme="tokyo"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 82% 12%, rgb(255 45 170 / 20%), transparent 36%),
+    radial-gradient(circle at 14% 82%, rgb(57 224 255 / 16%), transparent 38%),
+    linear-gradient(180deg, #120722 0%, #08030f 100%);
+}
+
+/* Ghibli — meadow skies and warm paper (light) */
+html[data-app-theme="ghibli"] {
+  --bg: #faf6ec;
+  --chrome: #fffdf5;
+  --text: #2f3327;
+
+  --color-bg: rgb(255 253 245 / 92%);
+  --color-bg-elevated: rgb(255 254 249 / 97%);
+  --color-bg-overlay: rgb(250 247 236 / 96%);
+  --color-bg-subtle: rgb(94 122 74 / 9%);
+  --color-bg-muted: rgb(94 122 74 / 13%);
+
+  --color-text-primary: #2f3327;
+  --color-text-secondary: #5f6a4f;
+  --color-text-muted: #8b9478;
+  --color-text-on-accent: #ffffff;
+  --color-text-inverted: #ffffff;
+
+  --color-accent: #4e8f5a;
+  --color-accent-hover: #3e7549;
+
+  --color-border: rgb(70 84 55 / 14%);
+  --color-border-strong: rgb(70 84 55 / 24%);
+
+  --color-app-backdrop: #f2eedf;
+  --color-window-chrome: rgb(255 253 246 / 94%);
+  --color-panel-chrome: rgb(255 254 250 / 95%);
+  --color-player-chrome: rgb(253 250 240 / 94%);
+  --color-backdrop-vignette: rgb(150 140 100 / 16%);
+  --color-control-hover: rgb(70 84 55 / 8%);
+  --color-control-active: rgb(70 84 55 / 13%);
+  --color-slider-track: #dcd6c0;
+  --color-slider-fill: #4e8f5a;
+  --color-slider-thumb: #2f3327;
+  --shadow-panel: 0 14px 34px rgb(120 110 70 / 16%);
+  --shadow-chrome: 0 14px 40px rgb(120 110 70 / 12%);
+}
+
+html[data-app-theme="ghibli"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 18% 12%, rgb(146 200 235 / 30%), transparent 36%),
+    radial-gradient(circle at 86% 86%, rgb(158 204 130 / 30%), transparent 38%),
+    linear-gradient(180deg, #fffdf5 0%, #f2eedf 100%);
+}
+
+/* Cel Shade — bold ink and highlighter (dark) */
+html[data-app-theme="cel"] {
+  --bg: #141026;
+  --chrome: #1b1536;
+  --text: #f7f2e4;
+
+  --color-bg: rgb(20 16 38 / 88%);
+  --color-bg-elevated: rgb(30 24 54 / 92%);
+  --color-bg-overlay: rgb(42 34 74 / 96%);
+  --color-bg-subtle: rgb(255 210 63 / 8%);
+  --color-bg-muted: rgb(8 5 18 / 42%);
+
+  --color-text-primary: #f7f2e4;
+  --color-text-secondary: #cfc3a0;
+  --color-text-muted: #7d7460;
+  --color-text-on-accent: #171103;
+  --color-text-inverted: #141026;
+
+  --color-accent: #ffd23f;
+  --color-accent-hover: #ffe27a;
+
+  --color-border: rgb(255 210 63 / 20%);
+  --color-border-strong: rgb(255 210 63 / 38%);
+
+  --color-app-backdrop: #0d0a1c;
+  --color-window-chrome: rgb(24 19 44 / 90%);
+  --color-panel-chrome: rgb(32 26 58 / 92%);
+  --color-player-chrome: rgb(18 14 34 / 94%);
+  --color-backdrop-vignette: rgb(0 0 0 / 60%);
+  --color-control-hover: rgb(255 210 63 / 10%);
+  --color-control-active: rgb(255 210 63 / 18%);
+  --color-slider-track: #2c2450;
+  --color-slider-fill: #ffd23f;
+  --color-slider-thumb: #f7f2e4;
+  --shadow-panel:
+    0 16px 34px rgb(0 0 0 / 48%),
+    3px 3px 0 rgb(255 210 63 / 14%);
+  --shadow-chrome:
+    0 14px 40px rgb(0 0 0 / 38%),
+    3px 3px 0 rgb(255 210 63 / 10%);
+}
+
+html[data-app-theme="cel"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 88% 6%, rgb(255 210 63 / 16%), transparent 32%),
+    radial-gradient(circle at 8% 92%, rgb(255 59 92 / 14%), transparent 34%),
+    linear-gradient(160deg, #1b1536 0%, #0d0a1c 100%);
+}
+
+/* Sunset — golden hour over the city (dark) */
+html[data-app-theme="sunset"] {
+  --bg: #170a12;
+  --chrome: #200e18;
+  --text: #ffeede;
+
+  --color-bg: rgb(28 12 22 / 86%);
+  --color-bg-elevated: rgb(44 18 34 / 90%);
+  --color-bg-overlay: rgb(60 24 44 / 94%);
+  --color-bg-subtle: rgb(255 138 80 / 10%);
+  --color-bg-muted: rgb(10 4 8 / 40%);
+
+  --color-text-primary: #ffeede;
+  --color-text-secondary: #e0a688;
+  --color-text-muted: #9a6a58;
+  --color-text-on-accent: #2a0e06;
+  --color-text-inverted: #ffeede;
+
+  --color-accent: #ff7a45;
+  --color-accent-hover: #ff9768;
+
+  --color-border: rgb(255 170 120 / 20%);
+  --color-border-strong: rgb(255 190 140 / 34%);
+
+  --color-app-backdrop: #12070d;
+  --color-window-chrome: rgb(32 14 24 / 90%);
+  --color-panel-chrome: rgb(44 19 32 / 92%);
+  --color-player-chrome: rgb(24 10 18 / 92%);
+  --color-backdrop-vignette: rgb(0 0 0 / 58%);
+  --color-control-hover: rgb(255 190 140 / 10%);
+  --color-control-active: rgb(255 190 140 / 18%);
+  --color-slider-track: #3a1c26;
+  --color-slider-fill: #ff9a5c;
+  --color-slider-thumb: #ffeede;
+  --shadow-panel:
+    0 16px 36px rgb(0 0 0 / 50%),
+    0 0 22px rgb(255 122 69 / 12%);
+  --shadow-chrome: 0 14px 40px rgb(0 0 0 / 38%);
+}
+
+html[data-app-theme="sunset"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 78% 88%, rgb(255 122 69 / 24%), transparent 40%),
+    radial-gradient(circle at 16% 10%, rgb(186 85 255 / 16%), transparent 36%),
+    linear-gradient(180deg, #2a1020 0%, #12070d 100%);
+}
+
+/* Deep Sea — bioluminescent depths (dark) */
+html[data-app-theme="ocean"] {
+  --bg: #03121a;
+  --chrome: #06202c;
+  --text: #dcf4ff;
+
+  --color-bg: rgb(4 20 28 / 86%);
+  --color-bg-elevated: rgb(8 34 46 / 90%);
+  --color-bg-overlay: rgb(12 46 62 / 94%
+);
+  --color-bg-muted: rgb(0 8 12 / 42%);
+
+  --color-text-primary: #dcf4ff;
+  --color-text-secondary: #7fb8cc;
+  --color-text-muted: #4a7c8f;
+  --color-text-on-accent: #012029;
+  --color-text-inverted: #dcf4ff;
+
+  --color-accent: #38c8e6;
+  --color-accent-hover: #67d8f0;
+
+  --color-border: rgb(90 200 225 / 18%);
+  --color-border-strong: rgb(90 200 225 / 34%);
+
+  --color-app-backdrop: #020d13;
+  --color-window-chrome: rgb(5 24 33 / 90%);
+  --color-panel-chrome: rgb(8 32 44 / 92%);
+  --color-player-chrome: rgb(4 18 26 / 92%);
+  --color-backdrop-vignette: rgb(0 0 0 / 60%);
+  --color-control-hover: rgb(90 200 225 / 10%);
+  --color-control-active: rgb(90 200 225 / 18%);
+  --color-slider-track: #0b3342;
+  --color-slider-fill: #38c8e6;
+  --color-slider-thumb: #dcf4ff;
+  --shadow-panel:
+    0 16px 36px rgb(0 0 0 / 50%),
+    0 0 22px rgb(56 200 230 / 10%);
+  --shadow-chrome: 0 14px 40px rgb(0 0 0 / 38%);
+}
+
+html[data-app-theme="ocean"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 50% 0%, rgb(56 200 230 / 16%), transparent 42%),
+    radial-gradient(circle at 84% 92%, rgb(20 120 160 / 22%), transparent 40%),
+    linear-gradient(180deg, #06202c 0%, #020d13 100%);
+}
+
+/* Nordic — cool paper and fjord blues (light) */
+html[data-app-theme="nordic"] {
+  --bg: #f4f7fa;
+  --chrome: #ffffff;
+  --text: #1c2733;
+
+  --color-bg: rgb(255 255 255 / 91%);
+  --color-bg-elevated: rgb(255 255 255 / 97%);
+  --color-bg-overlay: rgb(245 248 252 / 96%);
+  --color-bg-subtle: rgb(40 74 102 / 6%);
+  --color-bg-muted: rgb(40 74 102 / 9%);
+
+  --color-text-primary: #1c2733;
+  --color-text-secondary: #51636f;
+  --color-text-muted: #74848f;
+  --color-text-on-accent: #ffffff;
+  --color-text-inverted: #ffffff;
+
+  --color-accent: #2f6f8f;
+  --color-accent-hover: #255a75;
+
+  --color-border: rgb(30 60 80 / 12%);
+  --color-border-strong: rgb(30 60 80 / 20%);
+
+  --color-app-backdrop: #eef2f6;
+  --color-window-chrome: rgb(255 255 255 / 93%);
+  --color-panel-chrome: rgb(255 255 255 / 95%);
+  --color-player-chrome: rgb(250 252 254 / 94%);
+  --color-backdrop-vignette: rgb(110 130 150 / 14%);
+  --color-control-hover: rgb(30 60 80 / 7%);
+  --color-control-active: rgb(30 60 80 / 12%);
+  --color-slider-track: #d3dbe2;
+  --color-slider-fill: #2f6f8f;
+  --color-slider-thumb: #1c2733;
+  --shadow-panel: 0 14px 34px rgb(40 70 95 / 14%);
+  --shadow-chrome: 0 14px 40px rgb(40 70 95 / 12%);
+}
+
+html[data-app-theme="nordic"] [data-theme-root] {
+  background:
+    radial-gradient(circle at 12% 8%, rgb(160 200 225 / 30%), transparent 34%),
+    radial-gradient(circle at 88% 90%, rgb(210 225 235 / 40%), transparent 36%),
+    linear-gradient(180deg, #ffffff 0%, #eef2f6 100%);
 }

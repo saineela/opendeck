@@ -1,7 +1,8 @@
 {
-  "name": "jamc-server",
+  "name": "opendeck-server",
   "private": true,
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -13,11 +14,13 @@
   "dependencies": {
     "express": "^5.1.0",
     "helmet": "^8.1.0",
-    "jose": "^6.1.0"
+    "jose": "^6.1.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.1",
     "@types/node": "^22.13.0",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.19.2",
     "typescript": "~5.8.3",
     "vitest": "^3.0.5"

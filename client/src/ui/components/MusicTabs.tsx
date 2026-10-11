@@ -8,6 +8,8 @@ const MAX_TAB_TITLE_LENGTH = 32;
 
 function getTabTitle(tab: Tab): string {
   if (tab.view === "settings") return "Settings";
+  if (tab.view === "history") return "History";
+  if (tab.view === "recommendations") return "Recommendations";
   if (tab.view === "search" && tab.searchQuery) return tab.searchQuery;
   if (!tab.title) return "New Tab";
   if (tab.title.length <= MAX_TAB_TITLE_LENGTH) return tab.title;

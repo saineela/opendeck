@@ -1,0 +1,3186 @@
+openapi: 3.1.0
+info:
+  title: Music API
+  version: "1.0.0"
+  description: |
+    OpenDeck — a self-hosted, multi-user music service: email/password
+    accounts with optional TOTP second factors, Google Sign-In, per-user
+    library storage (playlists + liked songs), YouTube Music account
+    linking (server-side device-code OAuth), an allowlisted InnerTube/upstream
+    proxy with server-side Bearer injection, googlevideo audio streaming with
+    Range support, a namespaced LRU cache, per-user settings, and
+    per-account API keys for programmatic access.
+
+    All responses are JSON (`{"error": "…"}` on failure) except
+    `GET /api/media/stream` (audio bytes), the OAuth callback (HTML), and
+    `/api/auth/auth-callback.js` (JavaScript).
+
+    Authentication is cookie-based (`od_sid`, HttpOnly, SameSite=Lax) or,
+    for long-lived clients, an API key sent as
+    `Authorization: Bearer odk_…`. A key resolves to its owning account on
+    every session-authenticated endpoint; key-management routes
+    (`/api/keys`) and TOTP reconfiguration require the browser cookie, so a
+    leaked key cannot mint keys, revoke keys, or touch second factors.
+    Every non-GET request additionally passes a CSRF origin check: a
+    cross-site `Origin` or `Sec-Fetch-Site: cross-site` header yields 403;
+    requests without those headers (curl, server-side clients) pass.
+    Rate limits are fixed 60s windows per client IP (see each operation's
+    description); exceedance returns 429 with `Retry-After`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://localhost:4000
+    description: Development default (PORT falls back to 4000)
+tags:
+  - name: Health
+  - name: Auth
+  - name: Library
+  - name: Feed
+  - name: YouTube
+  - name: Proxy
+  - name: Media
+  - name: Cache
+  - name: Artwork
+  - name: Settings
+  - name: ApiKeys
+  - name: History
+  - name: Recommendations
+  - name: Push
+  - name: Admin
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe + service version
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, version]
+                properties:
+                  ok: { type: boolean, const: true }
+                  version: { type: string, example: "1.0.0" }
+
+  /api/auth/session:
+    get:
+      tags: [Auth]
+      operationId: getSession
+      summary: Current session state (anonymous-friendly)
+      security: []
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionPayload" }
+
+  /api/auth/whoami:
+    get:
+      tags: [Auth]
+      operationId: getWhoami
+      summary: Current session state, session required
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionPayload" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      operationId: registerAccount
+      summary: Create an email/password account and start a session
+      description: |
+        Rate limit: 5/min/IP. The password policy is length-only (8–256
+        characters). When `INVITE_CODE` is configured a matching `inviteCode`
+        is required (constant-time comparison). A Google identity is never
+        bound onto an existing password account with the same address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Account created and session cookie set
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, user]
+                properties:
+                  ok: { type: boolean, const: true }
+                  user: { $ref: "#/components/schemas/AuthUser" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: Registration disabled or invite code rejected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: An account with this email already exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      operationId: loginWithPassword
+      summary: Password sign-in (returns a TOTP challenge when 2FA is enabled)
+      description: |
+        Rate limit: 10/min/IP. The failure body is identical for an unknown
+        email and a wrong password. With `status: totp_required` NO session
+        cookie is issued yet — exchange `challenge` at `/api/auth/login/totp`.
+        10 consecutive failures lock the account for 15 minutes (429).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Password accepted
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status, user]
+                    properties:
+                      status: { type: string, const: ok }
+                      user: { $ref: "#/components/schemas/AuthUser" }
+                  - type: object
+                    required: [status, challenge]
+                    properties:
+                      status: { type: string, const: totp_required }
+                      challenge: { type: string }
+                      expiresInSeconds: { type: integer, const: 300 }
+        "401":
+          description: Wrong password or unknown email (identical response)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Password sign-in disabled on this server
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/login/totp:
+    post:
+      tags: [Auth]
+      operationId: loginWithTotp
+      summary: Complete sign-in with a TOTP code or backup code
+      description: |
+        Rate limits: `login` 10/min + `totp` 15/min per IP. A value that is
+        not 6 digits is treated as a backup code; consumed codes are deleted
+        so they cannot be replayed.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string, description: Value returned by `/api/auth/login` }
+                code: { type: string, description: "6-digit TOTP code or a backup code (XXXXX-XXXXX)" }
+      responses:
+        "200":
+          description: Code accepted and session issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, user]
+                properties:
+                  status: { type: string, const: ok }
+                  user: { $ref: "#/components/schemas/AuthUser" }
+        "401":
+          description: Invalid, expired, or forged challenge; wrong code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/totp/status:
+    get:
+      tags: [Auth]
+      operationId: getTotpStatus
+      summary: Two-step verification status for the signed-in account
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TotpStatus" }
+        "400":
+          description: Not a password account (Google accounts manage 2FA at Google)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/auth/totp/setup:
+    post:
+      tags: [Auth]
+      operationId: setupTotp
+      summary: Request a TOTP secret (stays disabled until confirmed)
+      description: |
+        Stores an unconfirmed secret and returns an `otpauth://` URI. Calling
+        it again replaces any unconfirmed secret. Rate limit: 15/min.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Enrolment payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TotpSetup" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Two-step verification is already enabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/totp/enable:
+    post:
+      tags: [Auth]
+      operationId: enableTotp
+      summary: Confirm a code and enable two-step verification
+      description: |
+        Returns 10 single-use backup codes. Only their SHA-256 digests are
+        stored. Rate limit: 15/min.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string, pattern: "^[0-9]{6}$" } }
+      responses:
+        "200":
+          description: Enabled — store the backup codes now
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled, backupCodes]
+                properties:
+                  enabled: { type: boolean, const: true }
+                  backupCodes:
+                    type: array
+                    minItems: 10
+                    maxItems: 10
+                    items: { type: string, pattern: "^[0-9A-F]{5}-[0-9A-F]{5}$" }
+        "400":
+          description: Code not valid (nothing changed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Already enabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/totp/disable:
+    post:
+      tags: [Auth]
+      operationId: disableTotp
+      summary: Turn off two-step verification (password + current code required)
+      description: |
+        Re-authentication is mandatory: a session alone must not be enough to
+        downgrade account security. Rate limit: 15/min.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, code]
+              properties:
+                password: { type: string }
+                code: { type: string, description: "6-digit TOTP code" }
+      responses:
+        "200":
+          description: Disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [enabled]
+                properties: { enabled: { type: boolean, const: false } }
+        "400":
+          description: Wrong password or code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Two-step verification is not enabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/google/start:
+    get:
+      tags: [Auth]
+      operationId: googleStart
+      summary: Begin Google Sign-In (authorization-code + PKCE S256)
+      description: |
+        Sets the HMAC-signed `od_oauth` cookie and 302-redirects to the
+        provider's authorization endpoint with `redirect_uri =
+        {APP_URL}/api/auth/google/callback`. Rate limit: 20/min.
+      security: []
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          description: Same-site absolute path (`/…`, not `//`) to land on after sign-in; anything else becomes `/`
+          schema: { type: string, default: "/" }
+      responses:
+        "302":
+          description: Redirect to the identity provider
+          headers:
+            Location: { schema: { type: string, format: uri } }
+            Set-Cookie:
+              description: "`od_oauth=…; HttpOnly; SameSite=Lax; Path=/` (10 min)"
+              schema: { type: string }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: OpenID discovery document could not be fetched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Google Sign-In not configured (missing GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/google/qr/start:
+    post:
+      tags: [Auth]
+      operationId: googleQrStart
+      summary: Create a cross-device QR sign-in attempt
+      description: |
+        Arms a short-lived (10 min, single-attempt) handoff id and returns the
+        link to encode as a QR code. The phone runs the consent; the desktop
+        claims the session with `POST /api/auth/google/qr/verify`. The phone
+        never receives a session cookie. Rate limit: 10/min (`google-qr`).
+      security: []
+      responses:
+        "200":
+          description: Attempt created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoogleQrStart" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503":
+          description: Google Sign-In not configured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/google/qr/open:
+    get:
+      tags: [Auth]
+      operationId: googleQrOpen
+      summary: Phone-facing entry point of a QR sign-in attempt
+      description: |
+        Opened by the phone after scanning the QR code. Validates the attempt,
+        sets the HMAC-signed `od_oauth` cookie plus the `od_qr_attempt` marker,
+        and 302-redirects to the provider's authorization endpoint. The marker
+        routes the callback into the QR completion branch (confirmation page,
+        no session). Rate limit: 20/min (`google-start` bucket).
+      security: []
+      parameters:
+        - name: attempt
+          in: query
+          required: true
+          description: Attempt id returned by `googleQrStart`
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to the identity provider
+          headers:
+            Location: { schema: { type: string, format: uri } }
+            Set-Cookie:
+              description: "`od_oauth=…; HttpOnly; SameSite=Lax; Path=/` (10 min) and `od_qr_attempt=…; HttpOnly; SameSite=Lax; Path=/api/auth` (10 min)"
+              schema: { type: string }
+        "404":
+          description: Unknown or already-used attempt (HTML)
+          content:
+            text/html:
+              schema: { type: string }
+        "410":
+          description: Attempt expired (HTML)
+          content:
+            text/html:
+              schema: { type: string }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: OpenID discovery document could not be fetched (HTML)
+          content:
+            text/html:
+              schema: { type: string }
+        "503":
+          description: Google Sign-In not configured (HTML)
+          content:
+            text/html:
+              schema: { type: string }
+
+  /api/auth/google/qr/verify:
+    post:
+      tags: [Auth]
+      operationId: googleQrVerify
+      summary: Verify a QR sign-in attempt (the desktop Verify button)
+      description: |
+        Reports `pending` while the phone has not finished the consent. On a
+        completed attempt it mints the session for THIS browser (sets
+        `od_sid`) and consumes the attempt — each attempt issues at most one
+        session. Rate limit: 10/min (`google-qr`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attemptId]
+              properties:
+                attemptId: { type: string, maxLength: 128 }
+      responses:
+        "200":
+          description: "Verification result (`pending`, or `verified` with the session cookie set)"
+          headers:
+            Set-Cookie:
+              description: "`od_sid=…; HttpOnly; SameSite=Lax; Path=/` (30-day sliding) — only when `status: verified`"
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoogleQrVerify" }
+        "400":
+          description: Missing attempt id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Unknown attempt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Attempt already consumed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "410":
+          description: Attempt expired
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/auth/google/callback:
+    get:
+      tags: [Auth]
+      operationId: googleCallback
+      summary: OAuth landing page (QR confirmation or popup helper HTML)
+      description: |
+        Validates `od_oauth` + `state`, exchanges the code (PKCE),
+        verifies the ID token against the provider JWKS, upserts the user.
+        With the `od_qr_attempt` marker (phone side of a QR attempt) it
+        marks the attempt complete and renders a confirmation page — NO
+        session cookie is set here. Otherwise it creates the session, sets
+        `od_sid`, and returns HTML whose script posts `{jamcAuth:true,
+        ok:boolean}` to the opener.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          schema: { type: string }
+        - name: state
+          in: query
+          schema: { type: string }
+        - name: error
+          in: query
+          description: Provider error (e.g. user cancelled consent)
+          schema: { type: string }
+      responses:
+        "200":
+          description: Sign-in completed (HTML)
+          headers:
+            Set-Cookie:
+              description: "`od_sid=…; HttpOnly; SameSite=Lax; Path=/` (30-day sliding)"
+              schema: { type: string }
+          content:
+            text/html:
+              schema: { type: string }
+        "400":
+          description: Sign-in failed — reason rendered in `<p id="auth-error">` (expired/tampered cookie, state mismatch, cancelled, exchange failure)
+          content:
+            text/html:
+              schema: { type: string }
+
+  /api/auth/auth-callback.js:
+    get:
+      tags: [Auth]
+      operationId: authCallbackScript
+      summary: Popup helper script (postMessage contract)
+      security: []
+      responses:
+        "200":
+          description: JavaScript posting `{jamcAuth:true, ok:boolean}` to the opener
+          content:
+            application/javascript:
+              schema: { type: string }
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Destroy the session and clear the cookie
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Logged out (idempotent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean, const: true } }
+
+  /api/library:
+    get:
+      tags: [Library]
+      operationId: getLibrary
+      summary: Full per-user library snapshot (playlists + tracks + liked songs)
+      description: |
+        Scoped to the session's user. Rate limit: 300/min.
+      responses:
+        "200":
+          description: Snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibrarySnapshot" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/sync:
+    post:
+      tags: [Library]
+      operationId: syncLibrary
+      summary: Atomically replace this account's library with a snapshot
+      description: |
+        Deletions are implicit: anything absent from the payload is removed.
+        The whole write runs in one transaction, so a validation failure
+        leaves the library untouched. Rate limit: 300/min.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: "Either `{snapshot: …}` or the snapshot object itself"
+              properties:
+                snapshot: { $ref: "#/components/schemas/LibrarySnapshotInput" }
+                playlists: { type: array, items: { $ref: "#/components/schemas/PlaylistInput" } }
+                likedSongs: { type: array, items: { $ref: "#/components/schemas/LibraryTrackInput" } }
+      responses:
+        "200":
+          description: Applied
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncResult" }
+        "400":
+          description: Malformed snapshot — nothing was written
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Over a collection limit (500 playlists, 1000 tracks, 20000 likes)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/playlists:
+    get:
+      tags: [Library]
+      operationId: listPlaylists
+      summary: List this account's playlists (newest activity first)
+      responses:
+        "200":
+          description: Playlists
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playlists]
+                properties:
+                  playlists:
+                    type: array
+                    items: { $ref: "#/components/schemas/Playlist" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Library]
+      operationId: createPlaylist
+      summary: Create a playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                description: { type: [string, "null"], maxLength: 1000 }
+                artworkUrl: { type: [string, "null"], maxLength: 2048 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playlist]
+                properties:
+                  playlist: { $ref: "#/components/schemas/Playlist" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Past the 500-playlist limit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/playlists/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^pl-" }
+    get:
+      tags: [Library]
+      operationId: getPlaylist
+      summary: Playlist with its ordered tracks
+      responses:
+        "200":
+          description: Playlist detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlaylistDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    patch:
+      tags: [Library]
+      operationId: updatePlaylist
+      summary: Rename or re-describe a playlist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                description: { type: [string, "null"], maxLength: 1000 }
+                artworkUrl: { type: [string, "null"], maxLength: 2048 }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playlist]
+                properties:
+                  playlist: { $ref: "#/components/schemas/Playlist" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Library]
+      operationId: deletePlaylist
+      summary: Delete a playlist (cascades to its tracks)
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/playlists/{id}/tracks:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^pl-" }
+    post:
+      tags: [Library]
+      operationId: addPlaylistTracks
+      summary: Add tracks (≤200 per call), deduplicated
+      description: |
+        Ids already present are refreshed in place (metadata updated, position
+        preserved) and reported under `replaced`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tracks]
+              properties:
+                tracks:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items: { $ref: "#/components/schemas/LibraryTrackInput" }
+      responses:
+        "200":
+          description: Applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [added, replaced, trackCount, trackIds]
+                properties:
+                  added: { type: integer }
+                  replaced: { type: integer }
+                  trackCount: { type: integer }
+                  trackIds: { type: array, items: { type: string } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: Too many tracks in the request or playlist
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/playlists/{id}/tracks/{trackId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^pl-" }
+      - name: trackId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Library]
+      operationId: removePlaylistTrack
+      summary: Remove one track from a playlist
+      responses:
+        "200":
+          description: |
+            `ok: true` when removed, `ok: false` when the track was not in the
+            playlist (both are 200 — the desired end state already holds).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties: { ok: { type: boolean } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/playlists/{id}/reorder:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: "^pl-" }
+    post:
+      tags: [Library]
+      operationId: reorderPlaylistTracks
+      summary: Apply an explicit leading track order
+      description: |
+        Tracks omitted from `trackIds` keep their relative order after the
+        supplied prefix, so a partial reorder from a drag handler is safe.
+        Unknown or duplicated ids are rejected with 400 and change nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trackIds]
+              properties:
+                trackIds:
+                  type: array
+                  uniqueItems: true
+                  items: { type: string }
+      responses:
+        "200":
+          description: Reordered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [trackCount]
+                properties: { trackCount: { type: integer } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/likes:
+    get:
+      tags: [Library]
+      operationId: listLikes
+      summary: This account's liked songs (most recent first)
+      responses:
+        "200":
+          description: Liked songs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [likedSongs]
+                properties:
+                  likedSongs:
+                    type: array
+                    items: { $ref: "#/components/schemas/StoredTrack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/library/likes/{trackId}:
+    parameters:
+      - name: trackId
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [Library]
+      operationId: likeTrack
+      summary: Like a song (idempotent)
+      description: The path id always wins over a mismatched body id.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LibraryTrackInput" }
+      responses:
+        "200":
+          description: Liked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [liked, total]
+                properties:
+                  liked: { type: boolean, const: true }
+                  total: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Past the 20000-like limit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Library]
+      operationId: unlikeTrack
+      summary: Remove a like (idempotent)
+      responses:
+        "200":
+          description: Not liked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [liked, total]
+                properties:
+                  liked: { type: boolean, const: false }
+                  total: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/feed/home:
+    get:
+      tags: [Feed]
+      operationId: getFeedHome
+      summary: Normalized home shelves ("Made for you", "Today's biggest hits", …)
+      description: |
+        Browses InnerTube's `FEmusic_home` server-side and returns its
+        carousel shelves as flat, client-ready sections. The tastebuilder
+        shelf is dropped. Rate limit: 120/min.
+      parameters:
+        - name: hl
+          in: query
+          schema: { type: string, pattern: "^[a-z]{2,3}$", default: en }
+        - name: gl
+          in: query
+          schema: { type: string, pattern: "^[A-Z]{2}$", default: US }
+      responses:
+        "200":
+          description: Home sections
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sections]
+                properties:
+                  sections:
+                    type: array
+                    items: { $ref: "#/components/schemas/FeedSection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Upstream YouTube Music failed or returned an unexpected payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/feed/next:
+    get:
+      tags: [Feed]
+      operationId: getFeedNext
+      summary: Watch-next recommendations for a seed video
+      description: |
+        Calls InnerTube's `/next` endpoint for `videoId` and returns the
+        recommendation panel without the seed entry itself. Rate limit: 120/min.
+      parameters:
+        - name: videoId
+          in: query
+          required: true
+          schema: { type: string, pattern: "^[\\w-]{6,20}$" }
+        - name: hl
+          in: query
+          schema: { type: string, pattern: "^[a-z]{2,3}$", default: en }
+        - name: gl
+          in: query
+          schema: { type: string, pattern: "^[A-Z]{2}$", default: US }
+      responses:
+        "200":
+          description: Recommended items (seed excluded)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/FeedItem" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Upstream YouTube Music failed or returned an unexpected payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/feed/playlist:
+    get:
+      tags: [Feed]
+      operationId: getFeedPlaylist
+      summary: Playlist header (with thumbnail) and its ordered songs
+      description: |
+        Browses a playlist (or album) browse id server-side and returns the
+        header — title, subtitle, description, artwork — plus every track in
+        order. Rows without a playable video keep their title and carry
+        `videoId: null`. Rate limit: 120/min.
+      parameters:
+        - name: browseId
+          in: query
+          required: true
+          schema: { type: string, pattern: "^[\\w-]{1,200}$" }
+        - name: params
+          in: query
+          description: Browse params echoed from a feed item (e.g. `ggMEgALjBA%3D%3D`)
+          schema: { type: string, pattern: "^[\\w%=-]{1,512}$" }
+        - name: hl
+          in: query
+          schema: { type: string, pattern: "^[a-z]{2,3}$", default: en }
+        - name: gl
+          in: query
+          schema: { type: string, pattern: "^[A-Z]{2}$", default: US }
+      responses:
+        "200":
+          description: Playlist detail with tracks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playlist]
+                properties:
+                  playlist: { $ref: "#/components/schemas/FeedPlaylist" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No playlist exists for that browse id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Upstream YouTube Music failed or returned an unexpected payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/feed/playlists:
+    get:
+      tags: [Feed]
+      operationId: getFeedPlaylists
+      summary: This account's library playlists with tracks inline
+      description: |
+        Database-only: every playlist the signed-in account owns, each with
+        its ordered tracks and artwork URL, in one call. Rate limit: 120/min.
+      responses:
+        "200":
+          description: Playlists with tracks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [playlists, counts]
+                properties:
+                  playlists:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/Playlist"
+                        - type: object
+                          required: [tracks]
+                          properties:
+                            tracks:
+                              type: array
+                              items: { $ref: "#/components/schemas/StoredTrack" }
+                  counts:
+                    type: object
+                    required: [playlists, likedSongs]
+                    properties:
+                      playlists: { type: integer }
+                      likedSongs: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/youtube/status:
+    get:
+      tags: [YouTube]
+      operationId: youtubeStatus
+      summary: YouTube Music link state (tokens never returned)
+      responses:
+        "200":
+          description: Link state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/YoutubeStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/youtube/link:
+    post:
+      tags: [YouTube]
+      operationId: youtubeLink
+      summary: Start device-code linking (idempotent while pending/linked)
+      description: "Rate limit: 10/min. Server polls Google until the user approves at youtube.com/activate."
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Current link state (usually `pending` with userCode)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/YoutubeStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Device-code request to YouTube failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/youtube/cancel:
+    post:
+      tags: [YouTube]
+      operationId: youtubeCancel
+      summary: Abort a pending device-code poll
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Updated link state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/YoutubeStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/youtube/unlink:
+    post:
+      tags: [YouTube]
+      operationId: youtubeUnlink
+      summary: Revoke the token remotely and delete local state
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Unlinked
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, linked]
+                properties:
+                  state: { type: string, const: idle }
+                  linked: { type: boolean, const: false }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/youtube/library:
+    get:
+      tags: [YouTube]
+      operationId: youtubeLibrary
+      summary: Linked account's YouTube Music library (normalised server-side)
+      description: |
+        Reads the linked account's library — playlists, liked songs, saved
+        albums, and recently played — and returns plain JSON.
+
+        This endpoint exists because an OAuth token is **rejected by the
+        WEB_REMIX client a browser sends** (`400 Request contains an invalid
+        argument`, regardless of `X-Goog-AuthUser`, `Origin`, or `Referer`).
+        The same token succeeds against InnerTube's TVHTML5 client, so this
+        server performs the read with TVHTML5 and normalises its `tvBrowseRenderer`
+        / `tileRenderer` payload into the shapes below.
+
+        Rate limited by the `yt-link-start` bucket (10/min) is **not** applied;
+        TVHTML5 fetches are bounded to 25s each and continuation pages are
+        capped at 8 per surface.
+      responses:
+        "200":
+          description: Normalised library
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/YouTubeLibrary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: No YouTube Music account is linked on this account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: YouTube Music did not return a library (upstream failure)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/yt/proxy:
+    post:
+      tags: [Proxy]
+      operationId: proxyRequest
+      summary: Forward an HTTPS request to an allowlisted host (CORS/data plane)
+      description: |
+        The client's replacement for direct YouTube calls. HTTPS + host
+        allowlist only (no open proxy); `cookie`/`authorization`/`origin`/
+        `referer`/`host`/… request headers are stripped; when the caller has
+        a linked YouTube account a fresh `Authorization: Bearer` is injected
+        for `*.youtube.com/youtubei/*` and `/api/stats/*` (never carried
+        across redirect origins). Redirects followed manually, ≤5 hops,
+        allowlist re-validated each hop. Upstream bodies ≤64 MB.
+        Rate limit: 900/min.
+
+        On successful forwarding the response is always HTTP 200 — read
+        `status` inside the envelope for the upstream status. Extra hosts:
+        `YT_PROXY_EXTRA_HOSTS`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyRequest" }
+      responses:
+        "200":
+          description: Upstream response envelope (check `status`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyResponse" }
+        "400":
+          description: Invalid payload, URL, method, or body_base64
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Host not allowlisted (or redirect target blocked)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "Host not allowed: example.com" }
+        "413":
+          description: Request body too large (>10 MB JSON)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Upstream failure, blocked redirect, or response >64 MB
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/media/stream:
+    get:
+      tags: [Media]
+      operationId: streamAudio
+      summary: Stream resolved YouTube audio bytes (Range-capable)
+      description: |
+        Accepts only `https://*.googlevideo.com/videoplayback` URLs. Forwards
+        `Range`/`User-Agent`; retries 403 once with `music.youtube.com`
+        origin/referer; redirect hops must stay on the googlevideo CDN.
+        Sets `Access-Control-Allow-Origin: *`. Rate limit: 300/min.
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          description: googlevideo `/videoplayback` URL (https, ≤8192 chars)
+          schema: { type: string, format: uri }
+        - name: Range
+          in: header
+          required: false
+          description: "Byte range, e.g. `bytes=0-1023` (drives seeking)"
+          schema: { type: string }
+      responses:
+        "200":
+          description: Full audio stream
+          headers:
+            Accept-Ranges: { schema: { type: string } }
+            Content-Type: { schema: { type: string } }
+            Access-Control-Allow-Origin: { schema: { type: string } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "206":
+          description: Partial content (Range satisfied)
+          headers:
+            Content-Range: { schema: { type: string } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "400":
+          description: Invalid media URL (scheme/host/path mismatch)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "Invalid media URL." }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "502":
+          description: Upstream fetch failed, or upstream returned 403/404
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/artwork:
+    get:
+      tags: [Artwork]
+      operationId: getArtwork
+      summary: Serve a cached artwork image (public)
+      description: |
+        Album art, track thumbnails and channel avatars. The client points
+        every `<img>` here instead of at YouTube, so a picture is fetched from
+        the origin once per instance rather than once per browser session, and
+        survives a device switch.
+
+        Public by design (artwork is public content), which is why the host
+        policy is narrower than `/api/yt/proxy`: only ytimg and
+        googleusercontent/ggpht artwork origins are accepted. The body is
+        stored as a BLOB and returned verbatim; concurrent misses on the same
+        URL are coalesced into a single origin fetch, and a failed fetch is
+        not retried for five seconds.
+
+        When the byte budget set by an administrator is reached, the
+        least-played artwork is evicted first (see
+        `POST /api/cache/artwork/setMaxBytes`). Rate limit 6000/min.
+      security: []
+      parameters:
+        - name: url
+          in: query
+          required: true
+          description: Absolute https URL of the artwork on an allowlisted host.
+          schema: { type: string, maxLength: 8192 }
+      responses:
+        "200":
+          description: Image bytes
+          headers:
+            ETag: { description: "\"<sha256 of the url>\"" }
+            Cache-Control: { description: "public, max-age=2592000, immutable" }
+          content:
+            image/*: {}
+        "304":
+          description: Validator matched — the picture is unchanged
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403":
+          description: Host is not on the artwork allowlist, or the URL is not https
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: The URL answered with a non-image content type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The artwork origin failed, timed out, or was throttled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/get:
+    post:
+      tags: [Cache]
+      operationId: cacheGet
+      summary: Read a cache entry from the caller's namespace
+      description: "Namespaces: `u:{userId}` when signed in, `anon` otherwise. Rate limit: 600/min."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CacheKeyBody" }
+      responses:
+        "200":
+          description: Stored string or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [value]
+                properties:
+                  value: { type: [string, "null"] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/set:
+    post:
+      tags: [Cache]
+      operationId: cacheSet
+      summary: Write a cache entry (LRU, byte budget)
+      description: "`value` must be a string ≤64 MB (413 above). An entry larger than the whole budget stores nothing and returns `changed:false`."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: { $ref: "#/components/schemas/CacheKey" }
+                value: { type: string, maxLength: 67108864 }
+      responses:
+        "200":
+          description: Write result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [changed]
+                properties: { changed: { type: boolean } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "413":
+          description: Cache entry too large (>64 MB)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/stats:
+    post:
+      tags: [Cache]
+      operationId: cacheStats
+      summary: Global cache statistics (all namespaces)
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheStats" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/setMaxBytes:
+    post:
+      tags: [Cache]
+      operationId: cacheSetMaxBytes
+      summary: Resize the cache byte budget (session required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxBytes]
+              properties:
+                maxBytes: { type: number, exclusiveMinimum: 0, example: 4294967296 }
+      responses:
+        "200":
+          description: Stats after re-trimming (LRU eviction)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheStats" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/clear:
+    post:
+      tags: [Cache]
+      operationId: cacheClear
+      summary: Clear the caller's namespace only
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats after clearing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheStats" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/stats:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheStats
+      summary: Artwork cache usage (session required)
+      description: The cache is shared by every account, so the numbers are instance-wide.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/setMaxBytes:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheSetMaxBytes
+      summary: Resize the artwork budget (admin only)
+      description: |
+        The cache is global, so the budget is administered globally: 401 for
+        anonymous callers and 403 for signed-in non-administrators. The value
+        is clamped to 64 MB – 64 GB, and the cache trims immediately when it
+        is lowered below current usage.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [maxBytes]
+              properties:
+                maxBytes: { type: number, exclusiveMinimum: 0, example: 536870912 }
+      responses:
+        "200":
+          description: Stats after re-trimming
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/cache/artwork/format:
+    post:
+      tags: [Artwork]
+      operationId: artworkCacheFormat
+      summary: "'Format' the artwork cache — drop every picture (admin only)"
+      description: |
+        Empties the cache and VACUUMs, so the disk space is returned rather
+        than held on SQLite's free list. Everything is re-fetched on demand.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Stats after formatting (always empty)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageCacheStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/settings/get:
+    post:
+      tags: [Settings]
+      operationId: settingsGet
+      summary: Read a per-user setting (session required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyBody" }
+      responses:
+        "200":
+          description: Stored JSON value or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [value]
+                properties:
+                  value: {}
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/settings/set:
+    post:
+      tags: [Settings]
+      operationId: settingsSet
+      summary: Write a per-user setting (session required)
+      description: "`value` must be JSON-serializable and ≤128 KB serialized (413 above)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, value]
+              properties:
+                key: { $ref: "#/components/schemas/SettingKey" }
+                value: {}
+      responses:
+        "200":
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413":
+          description: Setting value too large (>128 KB serialized)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/settings/remove:
+    post:
+      tags: [Settings]
+      operationId: settingsRemove
+      summary: Delete one setting (session required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KeyBody" }
+      responses:
+        "200": { description: Removed, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/keys:
+    get:
+      tags: [ApiKeys]
+      operationId: listApiKeys
+      summary: List your API keys (browser session required)
+      description: |
+        Returns label, prefix, and timestamps - never a usable key. Requires
+        a real browser session; presenting a bearer API key is rejected so a
+        leaked key cannot enumerate or mint keys. Rate limit: 60/min.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Keys owned by the signed-in account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: "#/components/schemas/ApiKeyInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [ApiKeys]
+      operationId: createApiKey
+      summary: Create an API key (plaintext returned exactly once)
+      description: |
+        The 201 body contains the plaintext `odk_...` key - the only time it
+        leaves the server; only its SHA-256 hash is stored. Browser session
+        required. Rate limit: 10/min; at most 25 keys per account (429).
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        "201":
+          description: Created - includes the plaintext key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedApiKey" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/keys/{id}:
+    delete:
+      tags: [ApiKeys]
+      operationId: revokeApiKey
+      summary: Revoke an API key (browser session required)
+      description: |
+        Deletes the key immediately; bearer requests using it fail with 401
+        from then on. Browser session required. Rate limit: 60/min.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Revoked, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/history:
+    get:
+      tags: [History]
+      operationId: listHistory
+      summary: List play history, newest first (session required)
+      description: |
+        Every successful `GET /api/media/stream` records a play — playback in
+        the web app and requests made with a bearer API key alike. Plays made
+        through the API include the key's label. Repeated requests for the same
+        track within 90 seconds (ranged audio requests) count as one play.
+        Rate limit: 180/min.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before
+          in: query
+          description: Cursor — return plays older than this `playedAt` value
+          schema: { type: integer, description: Epoch ms }
+      responses:
+        "200":
+          description: One page of plays, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plays, hasMore, nextCursor]
+                properties:
+                  plays:
+                    type: array
+                    items: { $ref: "#/components/schemas/HistoryPlay" }
+                  hasMore: { type: boolean }
+                  nextCursor:
+                    type: [integer, "null"]
+                    description: Pass as `before` to fetch the next page; null when empty
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [History]
+      operationId: clearHistory
+      summary: Delete all play history for your account (session required)
+      description: "Irreversible; only the caller's plays are removed. Rate limit: 180/min."
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, removed]
+                properties:
+                  ok: { type: boolean, const: true }
+                  removed: { type: integer, description: Rows deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/history/stats:
+    get:
+      tags: [History]
+      operationId: getHistoryStats
+      summary: Aggregated listening statistics (session required)
+      description: "Totals, today/7-day counts, app-vs-API split, and top tracks/artists. Rate limit: 180/min."
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Statistics for the signed-in account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HistoryStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/recommendations:
+    get:
+      tags: [Recommendations]
+      operationId: listRecommendations
+      summary: Songs other users recommended to you (session or API key)
+      description: |
+        Newest first. `unread=1` filters to unopened recommendations. The
+        response carries the account-wide `unreadCount` for badge UIs.
+        Rate limit: 180/min.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: unread
+          in: query
+          schema: { type: string, enum: ["1", "true"] }
+      responses:
+        "200":
+          description: Recommendations addressed to the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recommendations, unreadCount]
+                properties:
+                  recommendations:
+                    type: array
+                    items: { $ref: "#/components/schemas/Recommendation" }
+                  unreadCount: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Recommendations]
+      operationId: sendRecommendation
+      summary: Recommend a song to another registered user (session or API key)
+      description: |
+        Sends the track (by video id + metadata snapshot) to a registered
+        account and pushes a notification to their subscribed devices.
+        Recommending to yourself → 400; unknown recipient → 404.
+        Rate limit: 30/min.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipientId, videoId, title]
+              properties:
+                recipientId: { type: string, format: uuid }
+                videoId: { type: string, maxLength: 64 }
+                title: { type: string, maxLength: 300 }
+                artist: { type: string, maxLength: 200 }
+                album: { type: string, maxLength: 300 }
+                artworkUrl: { type: string, maxLength: 2048 }
+                durationSeconds: { type: number }
+                note:
+                  type: string
+                  maxLength: 500
+                  description: Optional message shown with the recommendation
+      responses:
+        "201":
+          description: Sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recommendation]
+                properties:
+                  recommendation: { $ref: "#/components/schemas/Recommendation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No registered user with that id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/recommendations/sent:
+    get:
+      tags: [Recommendations]
+      operationId: listSentRecommendations
+      summary: Songs you recommended to others (session or API key)
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Recommendations sent by the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recommendations]
+                properties:
+                  recommendations:
+                    type: array
+                    items: { $ref: "#/components/schemas/Recommendation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/recommendations/directory:
+    get:
+      tags: [Recommendations]
+      operationId: getUserDirectory
+      summary: Registered accounts you can recommend to (session or API key)
+      description: |
+        id + display name + picture only — emails never leave this endpoint's
+        scope. The caller is excluded. Rate limit: 180/min.
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Directory entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, name, picture]
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        picture: { type: [string, "null"], format: uri }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/recommendations/{id}/read:
+    post:
+      tags: [Recommendations]
+      operationId: markRecommendationRead
+      summary: Mark one received recommendation as read (session or API key)
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Read (idempotent), content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/recommendations/{id}:
+    delete:
+      tags: [Recommendations]
+      operationId: deleteRecommendation
+      summary: Retract a sent or dismiss a received recommendation (session or API key)
+      security:
+        - sessionCookie: []
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Removed, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/push/vapid-public-key:
+    get:
+      tags: [Push]
+      operationId: getVapidPublicKey
+      summary: Web Push VAPID public key (browser session required)
+      description: |
+        Used as `applicationServerKey` when subscribing via the Push API.
+        Cookie session only — bearer keys are refused. Rate limit: 30/min.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Base64url VAPID public key
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [publicKey]
+                properties:
+                  publicKey: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503":
+          description: Push is not available on this instance
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/push/subscribe:
+    post:
+      tags: [Push]
+      operationId: pushSubscribe
+      summary: Register this device for push notifications (browser session required)
+      description: |
+        Body is a standard PushAPI subscription (`endpoint` + `keys.p256dh` +
+        `keys.auth`). Upserts by endpoint, so re-subscribing refreshes it.
+        Cookie session only. Rate limit: 30/min.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint, keys]
+              properties:
+                endpoint: { type: string, maxLength: 2048 }
+                keys:
+                  type: object
+                  required: [p256dh, auth]
+                  properties:
+                    p256dh: { type: string }
+                    auth: { type: string }
+      responses:
+        "201": { description: Subscribed, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/push/unsubscribe:
+    post:
+      tags: [Push]
+      operationId: pushUnsubscribe
+      summary: Remove this device from push notifications (browser session required)
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties:
+                endpoint: { type: string, maxLength: 2048 }
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, removed]
+                properties:
+                  ok: { type: boolean, const: true }
+                  removed: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /api/admin/overview:
+    get:
+      tags: [Admin]
+      operationId: adminOverview
+      summary: Instance counts (browser session + admin role required)
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Counts across the instance
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users, admins, sessions, apiKeys, cacheEntries, imageCacheBytes, settings]
+                properties:
+                  users: { type: integer }
+                  admins: { type: integer }
+                  sessions: { type: integer }
+                  apiKeys: { type: integer }
+                  cacheEntries: { type: integer }
+                  imageCacheBytes:
+                    type: integer
+                    description: Bytes held by the shared artwork cache
+                  settings: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Signed in, but not an administrator
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/users:
+    get:
+      tags: [Admin]
+      operationId: adminListUsers
+      summary: List every account with its role (admin only)
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Accounts, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Admin]
+      operationId: adminCreateUser
+      summary: Create a password account (admin only)
+      description: No invite code required — the admin hands the credentials over directly.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+                password: { type: string, minLength: 8, maxLength: 256 }
+                name: { type: string, maxLength: 80 }
+                role: { type: string, enum: [admin, user], default: user }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: "#/components/schemas/AdminUser" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: An account with this email already exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/users/{id}:
+    patch:
+      tags: [Admin]
+      operationId: adminSetUserRole
+      summary: Change an account's role (admin only)
+      description: |
+        Refuses self-demotion (400) and any change that would leave the
+        instance with no administrator (409).
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [admin, user] }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user]
+                properties:
+                  user: { $ref: "#/components/schemas/AdminUser" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Would remove the last administrator
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Admin]
+      operationId: adminDeleteUser
+      summary: Delete an account and everything that cascades (admin only)
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400":
+          description: Refused (deleting your own account)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Would delete the last administrator
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/users/{id}/logout:
+    post:
+      tags: [Admin]
+      operationId: adminRevokeUserSessions
+      summary: Force an account out of every session (admin only)
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200": { description: Revoked, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/users/{id}/totp-reset:
+    post:
+      tags: [Admin]
+      operationId: adminResetUserTotp
+      summary: Clear an account's second factor and sign it out (admin only)
+      description: Lockout recovery — wipes the TOTP secret, enablement, and backup codes, then revokes the target's sessions.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200": { description: Cleared, content: { application/json: { schema: { $ref: "#/components/schemas/Ok" } } } }
+        "400":
+          description: Refused (resetting your own second factor)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/oauth:
+    get:
+      tags: [Admin]
+      operationId: adminGetOAuthConfig
+      summary: Effective OIDC sign-in provider settings (admin only)
+      description: The client secret is write-only — only `clientSecretSet` is ever returned.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Provider settings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provider]
+                properties:
+                  provider: { $ref: "#/components/schemas/AdminOAuthProvider" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Admin]
+      operationId: adminSetOAuthConfig
+      summary: Override the OIDC sign-in provider (admin only)
+      description: |
+        Stored in `instance_config`; takes effect on the next sign-in attempt.
+        Omit a field to keep it; send an empty string to delete that override
+        so the environment value applies again.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providerName: { type: string, minLength: 1, maxLength: 40 }
+                discoveryUrl: { type: string, format: uri }
+                clientId: { type: string, maxLength: 1024 }
+                clientSecret: { type: string, maxLength: 1024 }
+      responses:
+        "200":
+          description: Updated provider settings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provider]
+                properties:
+                  provider: { $ref: "#/components/schemas/AdminOAuthProvider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/registration:
+    get:
+      tags: [Admin]
+      operationId: adminGetRegistration
+      summary: Public account-creation switch (admin only)
+      description: |
+        Whether visitors can create accounts themselves on this instance.
+        `enabled` is the effective value (instance override, else the
+        `ALLOW_REGISTRATION` env baseline). First-run setup (zero accounts)
+        always stays open so a fresh instance can be provisioned.
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Current switch
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registration]
+                properties:
+                  registration: { $ref: "#/components/schemas/AdminRegistration" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Admin]
+      operationId: adminSetRegistration
+      summary: Open or close self-service account creation (admin only)
+      description: |
+        Stored in `instance_config` and effective immediately: the sign-up
+        option disappears from the login page, `/register` answers 403, and
+        an unknown OIDC identity can no longer mint a new account. Existing
+        accounts — password and OIDC — keep signing in either way.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated switch
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registration]
+                properties:
+                  registration: { $ref: "#/components/schemas/AdminRegistration" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/image-cache:
+    get:
+      tags: [Artwork, Admin]
+      operationId: adminImageCache
+      summary: Artwork cache report — usage plus the biggest occupants (admin only)
+      security:
+        - sessionCookie: []
+      responses:
+        "200":
+          description: Cache stats and the 25 largest pictures, largest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [stats, images]
+                properties:
+                  stats: { $ref: "#/components/schemas/ImageCacheStats" }
+                  images:
+                    type: array
+                    items: { $ref: "#/components/schemas/CachedArtworkEntry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/image-cache/format:
+    post:
+      tags: [Artwork, Admin]
+      operationId: adminImageCacheFormat
+      summary: Format the artwork cache — drop every picture and reclaim the disk (admin only)
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        "200":
+          description: Always-empty stats after formatting
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, stats]
+                properties:
+                  ok: { type: boolean, const: true }
+                  stats: { $ref: "#/components/schemas/ImageCacheStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/admin/reset:
+    post:
+      tags: [Admin]
+      operationId: adminResetAppData
+      summary: Instance-wide data reset (admin + fresh TOTP code required)
+      description: |
+        Deletes every account's durable settings and the cache entries, and
+        revokes every session except the one presenting the code. Accounts,
+        playlists, likes, and API keys are untouched. Requires `totpCode` —
+        a current TOTP code or an unused backup code from the acting admin
+        (403 without two-step verification enabled).
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [totpCode]
+              properties:
+                totpCode: { type: string, minLength: 6, maxLength: 11 }
+      responses:
+        "200":
+          description: Reset applied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, settingsCleared, cacheCleared, sessionsRevoked]
+                properties:
+                  ok: { type: boolean, const: true }
+                  settingsCleared: { type: integer }
+                  cacheCleared: { type: integer }
+                  sessionsRevoked: { type: integer }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Two-step verification not enabled, or wrong/missing code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: od_sid
+      description: |
+        HttpOnly, SameSite=Lax session cookie (30-day sliding expiry), set by
+        `POST /api/auth/register`, `POST /api/auth/login`,
+        `POST /api/auth/login/totp`, or `GET /api/auth/google/callback`.
+        Non-browser clients send it as a `Cookie` header and omit `Origin`
+        (the CSRF check then passes).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Per-account API key (`odk_` + 32 random bytes, base64url). Send it as
+        `Authorization: Bearer odk_…`; the server SHA-256-hashes the
+        presented value and resolves the owning account (only the hash is
+        stored). Works on every session-authenticated endpoint except
+        `/api/keys` and the TOTP setup/enable/disable routes, which demand
+        the browser cookie. Keys are created in Settings → API (max 25 per
+        account) and shown in full exactly once, at creation.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Ok:
+      type: object
+      required: [ok]
+      properties: { ok: { type: boolean, const: true } }
+
+    GoogleQrStart:
+      type: object
+      required: [attemptId, qrUrl, expiresInSec]
+      properties:
+        attemptId: { type: string, description: High-entropy, single-use handoff id }
+        qrUrl: { type: string, format: uri, description: Link to encode as a QR code (opens `googleQrOpen`) }
+        expiresInSec: { type: number, const: 600 }
+
+    GoogleQrVerify:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [pending, verified] }
+        user:
+          $ref: "#/components/schemas/AuthUser"
+          description: "Present when `status: verified`"
+
+    AdminUser:
+      type: object
+      required: [id, name, email, role, authProvider, totpEnabled, createdAt, lastLoginAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 80 }
+        email: { type: [string, "null"], format: email }
+        role: { type: string, enum: [admin, user] }
+        authProvider: { type: string, enum: [password, google] }
+        totpEnabled: { type: boolean }
+        createdAt: { type: integer, description: Epoch ms }
+        lastLoginAt: { type: integer, description: Epoch ms }
+
+    AdminOAuthProvider:
+      type: object
+      required: [providerName, discoveryUrl, clientId, clientSecretSet, configured, source]
+      properties:
+        providerName: { type: string, example: Keycloak }
+        discoveryUrl: { type: string, format: uri }
+        clientId: { type: string }
+        clientSecretSet:
+          type: boolean
+          description: Whether an effective secret exists — the value itself is never returned
+        configured: { type: boolean, description: clientId + clientSecret both present }
+        source:
+          type: string
+          enum: [instance, env, none]
+          description: Where the effective values come from
+
+    AdminRegistration:
+      type: object
+      required: [enabled, overridden, envDefault, inviteCodeRequired]
+      properties:
+        enabled:
+          type: boolean
+          description: Effective switch — instance override if set, else ALLOW_REGISTRATION
+        overridden:
+          type: boolean
+          description: True once an admin flipped the switch away from the env baseline
+        envDefault:
+          type: boolean
+          description: What ALLOW_REGISTRATION resolved to at boot
+        inviteCodeRequired:
+          type: boolean
+          description: INVITE_CODE is also set — a code is required on top of the switch
+
+    SessionPayload:
+      type: object
+      required:
+        [authenticated, user, youtubeLinked, totpEnabled, authProvider,
+         passwordLoginEnabled, registrationEnabled, googleSignInEnabled,
+         inviteCodeRequired, role, needsSetup, oauthProvider]
+      properties:
+        authenticated: { type: boolean }
+        user:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/AuthUser"
+        youtubeLinked: { type: boolean }
+        totpEnabled: { type: boolean, description: This account requires a second factor }
+        authProvider:
+          type: [string, "null"]
+          enum: [password, google, null]
+        passwordLoginEnabled: { type: boolean, description: "ALLOW_REGISTRATION — gates /register and /login" }
+        registrationEnabled: { type: boolean }
+        googleSignInEnabled: { type: boolean, description: A Google OAuth client is configured }
+        inviteCodeRequired: { type: boolean }
+        role:
+          type: [string, "null"]
+          enum: [admin, user, null]
+          description: Role of the signed-in account; null when signed out
+        needsSetup:
+          type: boolean
+          description: True while the instance has no accounts (first-run setup — the next registration becomes admin)
+        oauthProvider:
+          type: object
+          required: [name, configured]
+          properties:
+            name: { type: string, example: Google, description: Display name of the configured OIDC provider }
+            configured: { type: boolean, description: Whether a client id + secret are effective }
+
+    YoutubeStatus:
+      type: object
+      required: [state, linked]
+      properties:
+        state: { type: string, enum: [idle, pending, linked, error] }
+        linked: { type: boolean }
+        verificationUrl: { type: string, format: uri, description: Present while `pending` }
+        userCode: { type: string, description: "Present while `pending`, e.g. ABCD-EFGH" }
+        expiresInSec: { type: number, description: Seconds until the device code expires }
+        error: { type: string, description: Failure reason (expired/cancelled/denied) }
+
+    YouTubeLibrary:
+      type: object
+      required: [account, playlists, likedSongs, albums, recentlyPlayed]
+      properties:
+        account:
+          type: object
+          required: [name]
+          description: "YouTube never supplies the display name here — the OpenDeck session does."
+          properties:
+            name: { type: [string, "null"] }
+        playlists:
+          type: array
+          description: "Saved playlists, excluding the auto `LM` (Liked Music) entry — that is returned as `likedSongsPlaylist` semantics via the `LM` id."
+          items:
+            type: object
+            required: [id, title, owner]
+            properties:
+              id: { type: string, description: "Playlist id without the `VL` browse prefix (e.g. `LM`, `PLabc…`)" }
+              title: { type: string }
+              owner: { type: string }
+              artworkUrl: { type: string, format: uri }
+              trackCount: { type: integer }
+        likedSongs:
+          type: array
+          items: { $ref: "#/components/schemas/YouTubeLibraryTrack" }
+        albums:
+          type: array
+          items:
+            type: object
+            required: [id, title, artist]
+            properties:
+              id: { type: string }
+              title: { type: string }
+              artist: { type: string }
+              artworkUrl: { type: string, format: uri }
+        recentlyPlayed:
+          type: array
+          items: { $ref: "#/components/schemas/YouTubeLibraryTrack" }
+
+    YouTubeLibraryTrack:
+      type: object
+      required: [id, title, artist]
+      properties:
+        id: { type: string, description: YouTube video id }
+        title: { type: string }
+        artist: { type: string, description: "Empty string when YouTube did not supply one" }
+        artworkUrl: { type: string, format: uri }
+        durationSec: { type: integer }
+
+    ProxyRequest:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url:
+          type: string
+          maxLength: 8192
+          description: "HTTPS URL on an allowlisted host (localhost/127.0.0.1 always denied)"
+          examples: ["https://music.youtube.com/youtubei/v1/search?prettyPrint=false"]
+        method:
+          type: string
+          enum: [GET, POST, HEAD, PUT, DELETE]
+          default: GET
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            Forwarded verbatim except hop-by-hop and credential headers
+            (cookie, authorization, origin, referer, host, content-length,
+            connection, keep-alive, transfer-encoding, upgrade) which are
+            stripped. Name ≤256 chars, value ≤16384 chars.
+          examples:
+            - content-type: application/json
+              x-youtube-client-name: "67"
+        body_base64:
+          type: string
+          description: Base64 request body (omitted for GET/HEAD); ≤16 MB, bounded by the 10 MB JSON limit
+        timeout_ms:
+          type: number
+          minimum: 1000
+          maximum: 120000
+          default: 30000
+
+    ProxyResponse:
+      type: object
+      required: [status, headers, body_base64]
+      properties:
+        status:
+          type: integer
+          description: Upstream HTTP status (the outer HTTP status is 200 when forwarding succeeded)
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Lower-cased upstream headers minus set-cookie/content-encoding/content-length/transfer-encoding/connection/keep-alive/upgrade
+        body_base64:
+          type: string
+          description: Base64-encoded upstream body (≤64 MB decoded)
+
+    CacheKey:
+      type: string
+      minLength: 1
+      maxLength: 256
+
+    CacheKeyBody:
+      type: object
+      required: [key]
+      additionalProperties: false
+      properties:
+        key: { $ref: "#/components/schemas/CacheKey" }
+
+    KeyBody:
+      type: object
+      required: [key]
+      additionalProperties: false
+      properties:
+        key: { type: string, minLength: 1, maxLength: 256 }
+
+    SettingKey:
+      type: string
+      minLength: 1
+      maxLength: 256
+
+    CacheStats:
+      type: object
+      required: [maxBytes, usedBytes, entryCount]
+      properties:
+        maxBytes: { type: number, description: "Byte budget (default 536870912)" }
+        usedBytes: { type: number }
+        entryCount: { type: integer }
+
+    ImageCacheStats:
+      type: object
+      required: [maxBytes, usedBytes, entryCount, usageRatio]
+      properties:
+        maxBytes:
+          type: number
+          description: "Byte budget (default 536870912, clamped to 64 MB – 64 GB)"
+        usedBytes: { type: number }
+        entryCount: { type: integer, description: "Cached pictures" }
+        usageRatio:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Fraction of the budget in use — what the settings meter renders.
+
+    CachedArtworkEntry:
+      type: object
+      required: [hash, url, contentType, bytes, createdAt, lastUsed, hitCount, playCount]
+      properties:
+        hash: { type: string, description: "SHA-256 of the source URL — the cache key" }
+        url: { type: string }
+        contentType: { type: string, example: image/jpeg }
+        bytes: { type: integer }
+        createdAt: { type: integer, format: int64 }
+        lastUsed: { type: integer, format: int64 }
+        hitCount:
+          type: integer
+          description: Times served (sampled — updated at most once per 30 s)
+        playCount:
+          type: integer
+          description: Times any account played the track this picture belongs to.
+
+    ApiKeyInfo:
+      type: object
+      required: [id, label, keyPrefix, createdAt, lastUsedAt]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        keyPrefix:
+          type: string
+          description: First 12 characters of the key — safe to display
+        createdAt: { type: integer, description: Epoch ms }
+        lastUsedAt:
+          type: [integer, "null"]
+          description: Epoch ms of the last bearer use; null until first used
+        stats:
+          $ref: "#/components/schemas/ApiKeyPlayStats"
+
+    ApiKeyPlayStats:
+      type: object
+      description: Per-key play counters, attributed from `/api/media/stream` requests made with this key
+      required: [totalPlays, playsLast7Days, lastPlayedAt]
+      properties:
+        totalPlays: { type: integer, description: All-time plays made with this key }
+        playsLast7Days: { type: integer }
+        lastPlayedAt:
+          type: [integer, "null"]
+          description: Epoch ms of the most recent play; null if never used to play
+
+    Recommendation:
+      type: object
+      description: A song one registered user sent to another, with the track metadata snapshotted at send time
+      required: [id, senderUserId, senderName, recipientUserId, recipientName, videoId, title, artist, album, artworkUrl, durationSeconds, note, createdAt, readAt]
+      properties:
+        id: { type: string, format: uuid }
+        senderUserId: { type: string, format: uuid }
+        senderName: { type: string, description: Display name of the sender at read time }
+        recipientUserId: { type: string, format: uuid }
+        recipientName:
+          type: [string, "null"]
+          description: Display name of the recipient at read time; null once they delete their account
+        videoId: { type: string }
+        title: { type: string }
+        artist: { type: string, description: Empty string when unknown }
+        album: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        durationSeconds: { type: [integer, "null"] }
+        note: { type: [string, "null"], description: Optional message from the sender (≤ 500 chars) }
+        createdAt: { type: integer, description: Epoch ms }
+        readAt:
+          type: [integer, "null"]
+          description: Epoch ms the recipient opened it; null while unread
+
+    HistoryPlay:
+      type: object
+      required: [id, videoId, title, artist, album, artworkUrl, durationSeconds, source, apiKeyId, apiKeyLabel, playedAt]
+      properties:
+        id: { type: string, format: uuid }
+        videoId: { type: string }
+        title: { type: string }
+        artist: { type: string, description: Empty string when unknown }
+        album: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        durationSeconds: { type: [integer, "null"] }
+        source:
+          type: string
+          enum: [app, api]
+          description: "`app` = web player; `api` = bearer-key request to /api/media/stream"
+        apiKeyId:
+          type: [string, "null"]
+          format: uuid
+          description: Key that requested the play; null for app plays (or a since-revoked key)
+        apiKeyLabel:
+          type: [string, "null"]
+          description: Label of `apiKeyId` at read time; null for app plays
+        playedAt: { type: integer, description: Epoch ms }
+
+    HistoryStats:
+      type: object
+      required: [totalPlays, totalListeningSeconds, playsToday, plays7d, bySource, topTracks, topArtists]
+      properties:
+        totalPlays: { type: integer }
+        totalListeningSeconds:
+          type: integer
+          description: Sum of track durations across recorded plays
+        playsToday: { type: integer, description: Since local midnight }
+        plays7d: { type: integer }
+        bySource:
+          type: object
+          required: [app, api]
+          properties:
+            app: { type: integer }
+            api: { type: integer }
+        topTracks:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [videoId, title, artist, plays, lastPlayedAt]
+            properties:
+              videoId: { type: string }
+              title: { type: string }
+              artist: { type: string }
+              plays: { type: integer }
+              lastPlayedAt: { type: integer, description: Epoch ms }
+        topArtists:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            required: [artist, plays]
+            properties:
+              artist: { type: string }
+              plays: { type: integer }
+
+    CreatedApiKey:
+      type: object
+      required: [id, label, key, keyPrefix, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string, minLength: 1, maxLength: 80 }
+        key:
+          type: string
+          description: Plaintext odk_… key — returned only once, at creation
+        keyPrefix: { type: string }
+        createdAt: { type: integer, description: Epoch ms }
+
+    AuthUser:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        email: { type: [string, "null"], format: email }
+        picture: { type: [string, "null"], format: uri }
+
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 8, maxLength: 256 }
+        name: { type: string, maxLength: 80, description: Optional display name }
+        inviteCode: { type: string, description: Required when INVITE_CODE is configured }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    TotpStatus:
+      type: object
+      required: [enabled, enrolled, backupCodesRemaining]
+      properties:
+        enabled: { type: boolean }
+        enrolled: { type: boolean, description: A secret exists (may be unconfirmed) }
+        backupCodesRemaining: { type: integer }
+
+    TotpSetup:
+      type: object
+      required: [secret, otpauthUri, issuer, digits, periodSeconds]
+      properties:
+        secret: { type: string, description: Base32 shared secret to enter manually }
+        otpauthUri: { type: string, description: "otpauth:// URI for apps that accept one" }
+        issuer: { type: string, example: OpenDeck }
+        digits: { type: integer, const: 6 }
+        periodSeconds: { type: integer, const: 30 }
+
+    StoredTrack:
+      type: object
+      required: [id, source, title, artist]
+      properties:
+        id: { type: string, maxLength: 256 }
+        source: { type: string, default: youtube }
+        title: { type: string }
+        artist: { type: string }
+        album: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        durationSeconds: { type: [integer, "null"] }
+        position: { type: integer, description: Present in playlist payloads }
+        addedAt: { type: integer, description: Epoch ms; present in playlist payloads }
+
+    LibraryTrackInput:
+      type: object
+      required: [id, title]
+      properties:
+        id: { type: string, maxLength: 256 }
+        source: { type: string, default: youtube }
+        title: { type: string, maxLength: 300 }
+        artist: { type: string, maxLength: 300 }
+        album: { type: [string, "null"], maxLength: 300 }
+        artworkUrl: { type: [string, "null"], maxLength: 2048 }
+        durationSec: { type: [integer, "null"] }
+
+    Playlist:
+      type: object
+      required: [id, name, createdAt, updatedAt, trackCount]
+      properties:
+        id: { type: string, pattern: "^pl-" }
+        name: { type: string, maxLength: 120 }
+        description: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        createdAt: { type: integer, description: Epoch ms }
+        updatedAt: { type: integer, description: Epoch ms }
+        trackCount: { type: integer }
+
+    PlaylistDetail:
+      type: object
+      required: [playlist, tracks]
+      properties:
+        playlist: { $ref: "#/components/schemas/Playlist" }
+        tracks:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/StoredTrack"
+              - type: object
+                required: [position, addedAt]
+                properties:
+                  position: { type: integer }
+                  addedAt: { type: integer }
+
+    FeedItem:
+      type: object
+      required: [id, type, title, subtitle, artworkUrl]
+      properties:
+        id:
+          type: string
+          description: videoId for playable rows, browseId otherwise
+        type:
+          type: string
+          enum: [song, video, playlist, album, artist, other]
+        title: { type: string }
+        subtitle: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        videoId: { type: string }
+        browseId: { type: string }
+        params: { type: string, description: Echo back when browsing this item }
+        durationText: { type: string, description: "Watch-next items only, e.g. `3:34`" }
+        durationSeconds: { type: [integer, "null"] }
+
+    FeedSection:
+      type: object
+      required: [title, items]
+      properties:
+        title: { type: string, description: Shelf header, may be empty if absent upstream }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FeedItem" }
+
+    FeedPlaylistTrack:
+      type: object
+      required: [videoId, title, artist, album, artworkUrl, durationText, durationSeconds]
+      properties:
+        videoId:
+          type: [string, "null"]
+          description: Null for rows without a watch endpoint (unavailable tracks)
+        title: { type: string }
+        artist: { type: [string, "null"] }
+        album: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        durationText: { type: [string, "null"], description: "e.g. `3:35`" }
+        durationSeconds: { type: [integer, "null"] }
+
+    FeedPlaylist:
+      type: object
+      required: [browseId, title, subtitle, artworkUrl, description, tracks]
+      properties:
+        browseId: { type: string }
+        title: { type: string }
+        subtitle: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"], description: The playlist thumbnail }
+        description: { type: [string, "null"] }
+        tracks:
+          type: array
+          items: { $ref: "#/components/schemas/FeedPlaylistTrack" }
+
+    PlaylistInput:
+      type: object
+      required: [name]
+      properties:
+        id: { type: string, description: Kept when supplied, regenerated when missing or duplicated }
+        name: { type: string, maxLength: 120 }
+        description: { type: [string, "null"] }
+        artworkUrl: { type: [string, "null"] }
+        tracks:
+          type: array
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/LibraryTrackInput" }
+
+    LibrarySnapshotInput:
+      type: object
+      required: [playlists, likedSongs]
+      properties:
+        playlists:
+          type: array
+          maxItems: 500
+          items: { $ref: "#/components/schemas/PlaylistInput" }
+        likedSongs:
+          type: array
+          maxItems: 20000
+          items: { $ref: "#/components/schemas/LibraryTrackInput" }
+
+    LibrarySnapshot:
+      type: object
+      required: [playlists, likedSongs, counts]
+      properties:
+        playlists:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/Playlist"
+              - type: object
+                required: [tracks]
+                properties:
+                  tracks:
+                    type: array
+                    items: { $ref: "#/components/schemas/StoredTrack" }
+        likedSongs:
+          type: array
+          items: { $ref: "#/components/schemas/StoredTrack" }
+        counts:
+          type: object
+          required: [playlists, likedSongs]
+          properties:
+            playlists: { type: integer }
+            likedSongs: { type: integer }
+
+    SyncResult:
+      type: object
+      required: [playlists, likedSongs, tracks]
+      properties:
+        playlists: { type: integer }
+        likedSongs: { type: integer }
+        tracks: { type: integer }
+
+  responses:
+    Forbidden:
+      description: Signed in, but the account lacks the required role (admin routes)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "Administrator access is required." }
+
+    NotFound:
+      description: Not found — unknown id, or an id owned by another account
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "Playlist not found." }
+
+    BadRequest:
+      description: Invalid request payload
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Sign in is required
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "Sign in is required." }
+    RateLimited:
+      description: Too many requests (per-IP fixed 60s window)
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Seconds until the window resets
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: "Too many requests. Please slow down." }
+
+security:
+  - sessionCookie: []
+  - bearerAuth: []

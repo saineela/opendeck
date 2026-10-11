@@ -22,11 +22,11 @@
   justify-content: space-between;
   gap: 32px;
   padding: 18px 32px;
-  border: 1px solid rgb(255 255 255 / 8%);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background:
-    radial-gradient(circle at 90% 20%, rgb(255 0 51 / 10%), transparent 42%),
-    linear-gradient(135deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+    radial-gradient(circle at 90% 20%, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 42%),
+    var(--color-bg-subtle);
   box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
 }
 
@@ -114,7 +114,12 @@
   height: 410px;
   border-radius: var(--radius-lg);
   background:
-    linear-gradient(90deg, transparent, rgb(255 255 255 / 5%), transparent),
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-text-primary) 5%, transparent),
+      transparent
+    ),
     var(--color-bg-elevated);
   background-size: 220% 100%;
   animation: shimmer 1.4s infinite linear;

@@ -62,8 +62,13 @@ function loadTokens(db: Db, config: ServerConfig, userId: string): YouTubeTokens
       authTag: row.auth_tag,
     });
   } catch (error) {
+    // Do NOT delete the row here: wiping it makes the link unrecoverable even
+    // when the ciphertext is fine and only the key is temporarily wrong (a
+    // rotated APP_SECRET, a half-written .env, a mis-set DATA_DIR). Marking
+    // it invalid hides it from the client the same way, but keeps the payload
+    // for recovery or for a later re-link to overwrite cleanly.
     logger.error("youtube.account token decryption failed", { error, userId });
-    clearYouTubeTokens(db, userId);
+    markInvalid(db, userId);
     return null;
   }
 }

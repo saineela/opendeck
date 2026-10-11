@@ -13,9 +13,9 @@
 .panel {
   width: min(620px, 100%);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.13);
+  border: 1px solid var(--color-border);
   border-radius: 18px;
-  background: rgba(24, 24, 26, 0.7);
+  background: var(--color-panel-chrome);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.62);
   backdrop-filter: blur(30px) saturate(135%);
   -webkit-backdrop-filter: blur(30px) saturate(135%);
@@ -29,7 +29,7 @@
   gap: 12px;
   padding: 0 18px;
   color: var(--color-text-secondary);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .inputRow input {
@@ -44,7 +44,7 @@
 }
 
 .inputRow input::placeholder {
-  color: #777;
+  color: var(--color-text-muted);
 }
 
 .loading,
@@ -191,16 +191,16 @@
 }
 
 .removeRecentButton:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-control-hover);
   color: var(--color-text-primary);
 }
 
 .selected {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--color-control-hover);
 }
 
 .inputRow.selected {
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--color-bg-subtle);
 }
 
 .footer {
@@ -209,7 +209,7 @@
   align-items: center;
   gap: 18px;
   padding: 0 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--color-border);
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
 }
@@ -235,7 +235,7 @@
     height: 100%;
     border: 0;
     border-radius: 0;
-    background: rgba(18, 18, 20, 0.86);
+    background: var(--color-panel-chrome);
   }
 
   .inputRow {

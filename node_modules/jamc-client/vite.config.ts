@@ -14,7 +14,14 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
+      // The API reference is rendered by the server. Without this the
+      // Settings → "API docs" link resolves against the Vite origin and gets
+      // the SPA shell back instead of the docs.
       "/api": {
+        target: apiTarget,
+        changeOrigin: false,
+      },
+      "/docs": {
         target: apiTarget,
         changeOrigin: false,
       },
@@ -24,6 +31,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
+        target: apiTarget,
+        changeOrigin: false,
+      },
+      "/docs": {
         target: apiTarget,
         changeOrigin: false,
       },

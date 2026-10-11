@@ -4,9 +4,13 @@
   min-height: 0;
   overflow: hidden;
   background:
-    radial-gradient(circle at 52% 45%, rgb(150 18 38 / 20%) 0, rgb(55 30 38 / 12%) 24%, transparent 58%),
-    radial-gradient(circle at 50% 48%, rgb(255 255 255 / 7%) 0, transparent 42%),
-    linear-gradient(135deg, rgb(18 18 20 / 48%), rgb(3 3 4 / 26%));
+    radial-gradient(circle at 52% 45%, color-mix(in srgb, var(--color-accent) 20%, transparent) 0, color-mix(in srgb, var(--color-accent) 8%, transparent) 24%, transparent 58%),
+    radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--color-text-primary) 7%, transparent) 0, transparent 42%),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-app-backdrop) 55%, transparent),
+      color-mix(in srgb, var(--color-app-backdrop) 30%, transparent)
+    );
   backdrop-filter: blur(26px) saturate(120%);
 }
 
@@ -22,7 +26,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 52% 46%, rgb(125 8 30 / 18%), rgb(3 3 4 / 72%) 68%);
+  background: radial-gradient(circle at 52% 46%, color-mix(in srgb, var(--color-accent) 18%, transparent), color-mix(in srgb, var(--color-app-backdrop) 72%, transparent) 68%);
   backdrop-filter: blur(72px) saturate(110%);
 }
 
@@ -109,7 +113,7 @@
   padding: 4px 18px;
   border: 0;
   background: transparent;
-  color: rgb(255 255 255 / 38%);
+  color: color-mix(in srgb, var(--color-text-primary) 38%, transparent);
   font: inherit;
   font-size: clamp(22px, 3.15vw, 46px);
   line-height: 1.16;
@@ -123,8 +127,8 @@
 }
 
 .line:hover:not(:disabled) {
-  color: rgb(255 255 255 / 72%);
-  text-shadow: 0 0 12px rgb(255 255 255 / 20%);
+  color: color-mix(in srgb, var(--color-text-primary) 72%, transparent);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--color-text-primary) 20%, transparent);
 }
 
 .line:disabled {
@@ -132,15 +136,19 @@
 }
 
 .activeLine {
-  color: #fff;
+  color: var(--color-text-primary);
   opacity: 1;
   transform: scale(1);
-  text-shadow: 0 0 12px rgb(255 255 255 / 44%), 0 0 34px rgb(255 255 255 / 22%);
+  text-shadow:
+    0 0 12px color-mix(in srgb, var(--color-text-primary) 24%, transparent),
+    0 0 34px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 .activeLine:hover:not(:disabled) {
-  color: #fff;
-  text-shadow: 0 0 15px rgb(255 255 255 / 62%), 0 0 42px rgb(255 255 255 / 32%);
+  color: var(--color-text-primary);
+  text-shadow:
+    0 0 15px color-mix(in srgb, var(--color-text-primary) 32%, transparent),
+    0 0 42px color-mix(in srgb, var(--color-accent) 32%, transparent);
 }
 
 .message {
@@ -160,10 +168,10 @@
   min-width: 104px;
   height: 38px;
   padding: 0 15px;
-  border: 1px solid rgb(255 255 255 / 16%);
+  border: 1px solid var(--color-border);
   border-radius: 12px;
-  background: rgb(18 18 20 / 72%);
-  color: rgb(255 255 255 / 88%);
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -179,9 +187,9 @@
 }
 
 .resyncButton:hover {
-  border-color: rgb(255 255 255 / 28%);
-  background: rgb(32 32 35 / 82%);
-  color: #fff;
+  border-color: var(--color-border-strong);
+  background: var(--color-bg-overlay);
+  color: var(--color-text-primary);
   transform: translateX(-50%) translateY(-1px);
 }
 
@@ -192,7 +200,7 @@
   bottom: 22px;
   display: flex;
   gap: 12px;
-  color: rgb(255 255 255 / 42%);
+  color: color-mix(in srgb, var(--color-text-primary) 42%, transparent);
   font-size: 11px;
 }
 
