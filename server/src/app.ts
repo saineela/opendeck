@@ -30,11 +30,6 @@ function resolveClientDist(): string {
   return path.resolve(here, "../../client/dist");
 }
 
-function resolveTestAppDir(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "../../test-app");
-}
-
 function resolveApiMarkdown(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "../../docs/API.md");
@@ -218,11 +213,6 @@ export function createApp(config: ServerConfig, db: Db): Express {
       res.status(500).json({ error: "Documentation is unavailable." });
     }
   });
-
-  // Bare API test client. Served from this origin so session cookies and the
-  // CSRF origin check behave exactly as they do for the real client; it talks
-  // to nothing but this server's own endpoints.
-  app.use("/test-app", express.static(resolveTestAppDir()));
 
   if (config.serveClient) {
     const distDir = resolveClientDist();

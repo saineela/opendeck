@@ -24,8 +24,7 @@ credentials on the server. Attribution and licensing: rebuilt from
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Client (any origin-less browser app / the shipped React SPA /       │
-│         /test-app bare client)                                      │
+│ Client (any same-origin browser app / the shipped React SPA)        │
 │   • session cookie od_sid (HttpOnly)                                │
 │   • youtubei.js engine for parsing InnerTube responses              │
 │   • BotGuard po-token attestation (browser → jnn-pa.googleapis.com) │
@@ -44,7 +43,7 @@ credentials on the server. Attribution and licensing: rebuilt from
 │  /api/keys/*      per-account API keys (Bearer odk_…)               │
 │  /api/admin/*     role-based admin panel (users, OIDC, reset)       │
 │  /healthz         liveness probe                                    │
-│  static           client/dist SPA + /test-app                       │
+│  static           client/dist SPA                                   │
 │                                                                     │
 │  middleware: helmet CSP → JSON body (10 MB) → origin check →        │
 │              session → per-IP rate limiter → error mapper           │
@@ -91,8 +90,6 @@ webapp/
 ├─ playwright.config.ts    # E2E: fake IdP (:4310) + app (:4000) + unconfigured (:4100)
 ├─ .env / .env.example     # runtime configuration (docs for every variable)
 ├─ e2e/                    # Playwright suites + fake Google OIDC provider
-├─ test-app/               # bare API client served at /test-app (reference integration)
-│  └─ vendor/engine.js     # real data layer bundled by esbuild (youtubei.js+poToken)
 ├─ client/                 # Vite 7 + React 19 SPA (the shipped product UI)
 │  ├─ src/datasource/      # YouTubeMusicDataSource — search/library/streams
 │  ├─ src/auth/            # session client, password/TOTP, appLibrary sync
@@ -306,8 +303,7 @@ Notes:
   formats) you want `youtubei.js` — the shipped clients construct it with a
   fetch function that routes every request through this proxy. Reuse
   `client/src/datasource/youtube/tauriFetch.ts` (drop-in `fetch`
-  replacement) or the prebuilt engine `test-app/vendor/engine.js`
-  (`new YouTubeMusicDataSource()` exposes `search/getStreamData/…`).
+  replacement) and `YouTubeMusicDataSource` (`search/getStreamData/…`).
 
 Verified example (raw InnerTube search, no client library):
 
@@ -379,7 +375,7 @@ seek → pause/resume against a real Google account flow.
 
 | Pattern | How | When |
 |---|---|---|
-| **A. Same-origin SPA** (supported) | Serve UI from this process (`SERVE_CLIENT=1`) or put UI+API behind one origin in your reverse proxy; cookies just work | Default. The shipped React app and `/test-app` |
+| **A. Same-origin SPA** (supported) | Serve UI from this process (`SERVE_CLIENT=1`) or put UI+API behind one origin in your reverse proxy; cookies just work | Default. The shipped React app |
 | **B. API-only + separate UI on same origin** | `SERVE_CLIENT=0`, nginx serves the UI and proxies `/api` → the process | Static CDN frontends |
 | **C. Server-side / non-browser client** | Send `Cookie: od_sid=…` (obtain via the browser OAuth flow once), no `Origin` header required; enqueue scrobbles/cache/settings from your backend | Bots, desktop wrappers, mobile BFFs |
 | **D. Cross-origin browser client** | **Not supported** (no CORS on API routes, CSRF origin check rejects mutations). Build a same-origin BFF instead | — |
@@ -397,10 +393,6 @@ curl -s -b od_sid=$SID $API/api/auth/whoami
 # 6. api key:       POST $API/api/keys {"label":"cli"}  → plaintext odk_… once
 ```
 
-The `/test-app` page is the canonical worked example: it logs **every**
-request it makes (proxy targets decoded, media rows via resource timing) —
-open `http://localhost:4000/test-app/` while developing your integration.
-
 ---
 
 ## 7. Running it
@@ -416,8 +408,6 @@ npm run dev                   # API :4000 (tsx watch) + Vite :5173 (proxies /api
 
 - `npx tsx server/src/index.ts` with `PORT=4000` runs the API alone.
 - Restart after editing `.env` (`tsx watch` does not reload it).
-- Rebuild the test-app engine only when the data layer changes:
-  `npm run build:test-app`.
 
 ### Docker Compose (the recommended way to self-host)
 
@@ -570,12 +560,11 @@ npm run test:all  # both
 For your own client:
 
 1. Point it at a dev instance (`npm run dev`, API on :4000).
-2. Drive the flows through `/test-app` first to learn the request shapes.
-3. Reuse `tauriFetch.ts` (proxy envelope) + `buildMediaStreamUrl` +
+2. Reuse `tauriFetch.ts` (proxy envelope) + `buildMediaStreamUrl` +
    `poToken.ts` — those three files are the entire network contract.
-4. Verify 401/403/429/503 behavior against an unconfigured instance
+3. Verify 401/403/429/503 behavior against an unconfigured instance
    (`GOOGLE_CLIENT_ID= PORT=4100 npm start`) — the E2E suite does exactly
    this for sign-in.
-5. Multi-user checks are cheap to script: register two accounts, create a
+4. Multi-user checks are cheap to script: register two accounts, create a
    playlist with the first, and confirm the second gets 404 on it (see
    `server/src/library.test.ts` for the canonical assertions).

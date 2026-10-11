@@ -26,7 +26,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci
 
 COPY . .
-RUN npm run build && npm run build:test-app
+RUN npm run build
 
 
 FROM node:24-alpine AS runtime
@@ -44,11 +44,9 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Compiled artifacts from the build stage. Paths must line up with the
-# server's relative lookups: `server/dist` → `../../client/dist` and
-# `../../test-app`.
+# server's relative lookup: `server/dist` → `../../client/dist`.
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
-COPY --from=build /app/test-app ./test-app
 # Rendered as the public /docs API reference page.
 COPY --from=build /app/docs ./docs
 
