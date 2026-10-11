@@ -1,0 +1,45 @@
+OpenDeck
+Copyright 2026 OpenDeck contributors
+
+This product is a web-based adaptation of, and derivative work of, the
+desktop application:
+
+  Just Another Music Client
+  https://github.com/2latemc/JustAnotherMusicClient
+  Copyright 2024 the JustAnotherMusicClient authors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this project except in compliance with the License. You may obtain a copy
+of the License in the LICENSE file of this repository, or at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
+
+Modifications made in this project include, without limitation:
+  * replacement of the Tauri desktop shell with a Node.js/Express server
+  * multi-user accounts, email/password sign-in, and TOTP second factors
+  * server-side per-user library storage (playlists and liked songs)
+  * song recommendations between registered accounts, with Web Push delivery
+    and a documented bearer-key-compatible HTTP API
+  * twelve built-in interface themes plus custom CSS theme support, with an
+    admin-set instance default that also styles the sign-in page
+  * Discord Rich Presence driven from the server, with per-account settings,
+    a custom status message, and per-account "Secret Show" exceptions that
+    keep chosen songs off the profile
+  * an offline feature that stores audio in the listener's own browser
+    storage (IndexedDB) rather than on a shared server disk; the server
+    relays audio for playback without writing audio files to its own disk
+  * a shared server-side artwork and API-response cache
+  * Docker packaging and self-hosted API documentation
+  * removal of the Last.fm integration
+
+Upstream does not ship a NOTICE file of its own; this file is an attribution
+notice for the derivative. See README.md ("Credits and license") for the
+full attribution statement. This product's license and attribution concern
+the software only — see the Legal section of README.md regarding content
+retrieved from YouTube.

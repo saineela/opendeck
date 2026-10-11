@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Music API — bare test client</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header>
+    <h1>Music API <span>· bare test client</span></h1>
+    <div class="badges">
+      <span id="badge-health" class="badge">health …</span>
+      <span id="badge-session" class="badge">session …</span>
+      <span id="badge-yt" class="badge">youtube …</span>
+      <a class="badge link" href="/">open full app →</a>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- 1. System / health -->
+    <section id="sec-system">
+      <h2>System <small>GET /healthz</small></h2>
+      <div class="row">
+        <button id="btn-health" class="btn">Refresh health</button>
+        <button id="btn-headers" class="btn">Show security headers</button>
+      </div>
+      <pre id="health-out" class="out">not loaded</pre>
+      <pre id="headers-out" class="out hidden"></pre>
+    </section>
+
+    <!-- 2. Google auth -->
+    <section id="sec-auth">
+      <h2>Google sign-in <small>/api/auth/*</small></h2>
+      <div class="row">
+        <button id="btn-session" class="btn">Refresh session</button>
+        <button id="btn-signin" class="btn primary">Sign in (popup)</button>
+        <button id="btn-whoami" class="btn">whoami</button>
+        <button id="btn-signout" class="btn danger">Sign out</button>
+      </div>
+      <pre id="auth-out" class="out">not loaded</pre>
+    </section>
+
+    <!-- 3. YouTube Music link -->
+    <section id="sec-youtube">
+      <h2>YouTube Music link <small>/api/youtube/*</small></h2>
+      <div class="row">
+        <button id="btn-yt-refresh" class="btn">Refresh status</button>
+        <button id="btn-yt-start" class="btn primary">Connect (device code)</button>
+        <button id="btn-yt-cancel" class="btn">Cancel</button>
+        <button id="btn-yt-unlink" class="btn danger">Unlink</button>
+      </div>
+      <div id="yt-code" class="code-box hidden">
+        <div>Open <a id="yt-code-url" href="#" target="_blank" rel="noreferrer"></a> and enter:</div>
+        <div class="code" id="yt-code-value"></div>
+      </div>
+      <pre id="yt-out" class="out">not loaded</pre>
+    </section>
+
+    <!-- 4. Search -->
+    <section id="sec-search" class="span2">
+      <h2>Search <small>POST /api/yt/proxy → InnerTube</small></h2>
+      <div class="row">
+        <input id="search-input" type="search" placeholder="search for music… (e.g. believer imagine dragons)"
+               aria-label="Search query" />
+        <button id="btn-search" class="btn primary">Search</button>
+        <span id="search-status" class="status"></span>
+      </div>
+      <div id="search-results"></div>
+    </section>
+
+    <!-- 5. Player -->
+    <section id="sec-player" class="span2">
+      <h2>Player <small>GET /api/media/stream</small></h2>
+      <div class="player">
+        <img id="np-art" class="np-art" alt="" />
+        <div class="np-meta">
+          <div id="np-title" class="np-title">nothing playing</div>
+          <div id="np-artist" class="np-artist">search for a track and press ▶</div>
+          <div id="np-stream" class="np-stream"></div>
+        </div>
+        <div class="controls">
+          <button id="btn-prev" class="btn icon" aria-label="Previous">⏮</button>
+          <button id="btn-play" class="btn icon primary" aria-label="Play or pause">▶</button>
+          <button id="btn-next" class="btn icon" aria-label="Next">⏭</button>
+        </div>
+        <div class="timeline">
+          <span id="time-now">0:00</span>
+          <input id="seek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Seek" />
+          <span id="time-total">0:00</span>
+        </div>
+        <div class="volume">
+          <button id="btn-mute" class="btn icon" aria-label="Mute or unmute">🔊</button>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+        </div>
+      </div>
+      <h3>Queue <span id="queue-count" class="status"></span></h3>
+      <ol id="queue-list" class="queue"></ol>
+    </section>
+
+    <!-- 6. Cache / settings / API keys -->
+    <section id="sec-data" class="span2">
+      <h2>Cache · Settings · API keys <small>/api/cache /api/settings /api/keys</small></h2>
+      <div class="row">
+        <button id="btn-cache-stats" class="btn">cache: stats</button>
+        <button id="btn-cache-set" class="btn">cache: set</button>
+        <button id="btn-cache-clear" class="btn">cache: clear (own ns)</button>
+        <button id="btn-settings-get" class="btn">settings: get</button>
+        <button id="btn-settings-set" class="btn">settings: set</button>
+        <button id="btn-apikeys" class="btn">api keys: list</button>
+      </div>
+      <pre id="data-out" class="out">pick an endpoint</pre>
+    </section>
+
+    <!-- 7. API log -->
+    <section id="sec-log" class="span2">
+      <h2>API log <small>every request this page makes</small></h2>
+      <div class="row">
+        <button id="btn-log-clear" class="btn">Clear log</button>
+        <span id="log-count" class="status"></span>
+      </div>
+      <div class="log-wrap">
+        <table class="log">
+          <thead>
+            <tr><th>time</th><th>kind</th><th>method</th><th>target</th><th>status</th><th>ms</th><th>note</th></tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

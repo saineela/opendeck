@@ -14,7 +14,7 @@ interface AlbumCardProps {
 }
 
 export function AlbumCard({
-  color = "#333333",
+  color = "var(--color-bg-muted)",
   artworkUrl,
   title,
   subtitle,

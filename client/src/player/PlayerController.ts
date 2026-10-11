@@ -1000,6 +1000,7 @@ export class PlayerController {
         album: currentTrack.album ?? "",
         artworkUrl: getDiscordArtworkUrl(currentTrack),
         songUrl: getYouTubeMusicTrackUrl(currentTrack),
+        videoId: currentTrack.id,
         artistUrl: getYouTubeMusicArtistUrl(currentTrack),
         albumUrl: getYouTubeMusicAlbumUrl(currentTrack),
         duration: Math.floor(currentTrack.durationSec ?? 0),

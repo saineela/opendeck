@@ -20,11 +20,15 @@ function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
       clientSecret: "",
       discoveryUrl: "https://accounts.google.com/.well-known/openid-configuration",
       scopes: ["openid"],
+      providerName: "Google",
       configured: false,
     },
-    lastfm: { apiKey: null, apiSecret: null, configured: false },
+    adminEmails: [],
+    registration: { enabled: true, inviteCode: null },
+    totpIssuer: "OpenDeck",
     trustProxy: false,
     serveClient: false,
+    discordClientId: null,
     ...overrides,
   };
 }

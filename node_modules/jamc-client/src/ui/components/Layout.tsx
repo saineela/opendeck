@@ -14,6 +14,12 @@ interface LayoutProps {
   onNavigateAlbum: (album: Album) => void;
   onNavigatePlaylist: (playlist: Playlist) => void;
   onOpenSettings: () => void;
+  /** Opens the Music History tab. */
+  onOpenHistory: () => void;
+  /** Opens the Recommendations tab. */
+  onOpenRecommendations: () => void;
+  /** Opens the account dialog when nothing is signed in yet. */
+  onSignIn?: () => void;
   showSearchBar: boolean;
   onOpenSearch: () => void;
   canGoBack: boolean;
@@ -73,6 +79,9 @@ export function Layout({
   onNavigateAlbum,
   onNavigatePlaylist,
   onOpenSettings,
+  onSignIn,
+  onOpenHistory,
+  onOpenRecommendations,
   showSearchBar,
   onOpenSearch,
   canGoBack,
@@ -286,6 +295,9 @@ export function Layout({
           onWidthChange={onSidebarWidthChange}
           onNavigateAlbum={onNavigateAlbum}
           onNavigatePlaylist={onNavigatePlaylist}
+          onSignIn={onSignIn}
+          onOpenHistory={onOpenHistory}
+          onOpenRecommendations={onOpenRecommendations}
         />
         <div className={styles.contentArea}>
           {showSearchBar && (

@@ -11,6 +11,9 @@ import {
 } from "react";
 import {
   IconCheck,
+  IconEye,
+  IconEyeOff,
+  IconGift,
   IconHeart,
   IconHeartFilled,
   IconLink,
@@ -22,9 +25,11 @@ import {
   IconPlaylist,
   IconSearch,
   IconTrash,
+  IconUser,
   IconX,
 } from "@tabler/icons-react";
 import type { Playlist, Track } from "../../datasource/types";
+import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
 import {
@@ -43,6 +48,18 @@ import {
 } from "../../plugins/official/downloader/downloaderStore";
 import { usePluginEnabled } from "../../plugins/pluginHost";
 import { DOWNLOADER_PLUGIN_ID } from "../../plugins/official/downloader/manifest";
+import {
+  fetchDirectory,
+  sendRecommendation,
+  type DirectoryEntry,
+} from "../../internal/recommendationsClient";
+import {
+  addSecretTrackShared,
+  ensureSecretTracksLoaded,
+  isTrackSecret,
+  removeSecretTrackShared,
+  subscribeSecretTracks,
+} from "../../internal/presenceClient";
 
 interface MenuPosition {
   x: number;
@@ -100,7 +117,17 @@ export function TrackContextMenuProvider({
   const [addingPlaylistId, setAddingPlaylistId] = useState<string | null>(null);
   const [isRemovingTrack, setIsRemovingTrack] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Secret Show membership, kept live so the menu label flips immediately.
+  const [secretVersion, setSecretVersion] = useState(0);
+  useEffect(() => subscribeSecretTracks(() => setSecretVersion((value) => value + 1)), []);
   const [toast, setToast] = useState<string | null>(null);
+  const [isRecipientPickerOpen, setIsRecipientPickerOpen] = useState(false);
+  const [recipientDirectory, setRecipientDirectory] = useState<DirectoryEntry[] | null>(null);
+  const [recipientDirectoryError, setRecipientDirectoryError] = useState<string | null>(null);
+  const [recipientQuery, setRecipientQuery] = useState("");
+  const [recommendNote, setRecommendNote] = useState("");
+  const [sendingRecommendation, setSendingRecommendation] = useState(false);
+  const [sentRecipientIds, setSentRecipientIds] = useState<string[]>([]);
 
   const playlists = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -123,6 +150,22 @@ export function TrackContextMenuProvider({
       window.removeEventListener("blur", closeMenu);
     };
   }, [menuPosition]);
+
+  const recipientDirectoryRef = useRef<DirectoryEntry[] | null>(null);
+  recipientDirectoryRef.current = recipientDirectory;
+
+  const loadRecipientDirectory = () => {
+    setRecipientDirectoryError(null);
+    fetchDirectory()
+      .then((users) => setRecipientDirectory(users))
+      .catch((directoryError) => {
+        setRecipientDirectoryError(
+          directoryError instanceof Error
+            ? directoryError.message
+            : "Unable to load OpenDeck users.",
+        );
+      });
+  };
 
   useLayoutEffect(() => {
     if (!menuPosition) return;
@@ -157,14 +200,17 @@ export function TrackContextMenuProvider({
       requestAnimationFrame(() => searchRef.current?.focus());
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || (!isPickerOpen && !menuPosition)) return;
+      if (event.key !== "Escape" || (!isPickerOpen && !isRecipientPickerOpen && !menuPosition)) return;
       event.preventDefault();
       setMenuPosition(null);
-      if (!addingPlaylistId) setIsPickerOpen(false);
+      if (!addingPlaylistId && !sendingRecommendation) {
+        setIsPickerOpen(false);
+        setIsRecipientPickerOpen(false);
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [addingPlaylistId, isPickerOpen, menuPosition]);
+  }, [addingPlaylistId, isPickerOpen, isRecipientPickerOpen, menuPosition, sendingRecommendation]);
 
   useEffect(() => {
     if (selectedPlaylistIndex === null) return;
@@ -207,9 +253,12 @@ export function TrackContextMenuProvider({
   ) => {
     event.preventDefault();
     event.stopPropagation();
+    // Warm the Secret Show cache so the menu can label this song correctly.
+    void ensureSecretTracksLoaded();
     setTrack(selectedTrack);
     setMenuContext(context ?? null);
     setIsPickerOpen(false);
+    setIsRecipientPickerOpen(false);
     setError(null);
     setQuery("");
     setSelectedPlaylistIndex(null);
@@ -223,6 +272,28 @@ export function TrackContextMenuProvider({
     setToast(message);
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), duration);
+  };
+
+  /** Secret Show: hide this song from Discord without stopping it. */
+  const toggleSecretShow = async (selectedTrack: Track) => {
+    try {
+      if (isTrackSecret(selectedTrack.id)) {
+        await removeSecretTrackShared(selectedTrack.id);
+        showToast(`"${selectedTrack.title}" will show on Discord again`);
+      } else {
+        await addSecretTrackShared({
+          videoId: selectedTrack.id,
+          title: selectedTrack.title,
+          artist: selectedTrack.artist,
+          ...(selectedTrack.artworkUrl
+            ? { artworkUrl: toCachedArtworkUrl(selectedTrack.artworkUrl) }
+            : {}),
+        });
+        showToast(`"${selectedTrack.title}" is now a Secret Show`);
+      }
+    } catch {
+      showToast("Could not update Secret Show.");
+    }
   };
 
   const showPersistentToast = (message: string) => {
@@ -267,6 +338,52 @@ export function TrackContextMenuProvider({
     setQuery("");
     setSelectedPlaylistIndex(null);
     setIsPickerOpen(true);
+  };
+
+  const openRecipientPicker = () => {
+    setMenuPosition(null);
+    setError(null);
+    setRecipientQuery("");
+    setRecommendNote("");
+    setSentRecipientIds([]);
+    setIsRecipientPickerOpen(true);
+    setRecipientDirectory(null);
+    loadRecipientDirectory();
+  };
+
+  const sendToRecipient = async (recipient: DirectoryEntry) => {
+    if (!track || sendingRecommendation) return;
+    const selectedTrack = track;
+    if (selectedTrack.source !== "youtube") {
+      setIsRecipientPickerOpen(false);
+      showToast("Only YouTube Music songs can be recommended.", 4000);
+      return;
+    }
+
+    setSendingRecommendation(true);
+    setError(null);
+    try {
+      await sendRecommendation({
+        recipientId: recipient.id,
+        videoId: selectedTrack.id,
+        title: selectedTrack.title,
+        artist: selectedTrack.artist,
+        album: selectedTrack.album,
+        artworkUrl: selectedTrack.artworkUrl,
+        durationSeconds: selectedTrack.durationSec,
+        note: recommendNote.trim() || undefined,
+      });
+      setSentRecipientIds((current) => [...current, recipient.id]);
+      setRecommendNote("");
+      showToast(`Recommended to ${recipient.name}`);
+    } catch (sendError) {
+      showToast(
+        sendError instanceof Error ? sendError.message : "Unable to send this recommendation.",
+        4000,
+      );
+    } finally {
+      setSendingRecommendation(false);
+    }
   };
 
   const removeFromPlaylist = async () => {
@@ -384,6 +501,15 @@ export function TrackContextMenuProvider({
     && downloaderPluginEnabled
     && track
     && getDownloadStatus(track.id) !== "ready";
+  const canRecommendSelectedTrack = track?.source === "youtube";
+  const visibleRecipients = useMemo(() => {
+    const normalizedQuery = recipientQuery.trim().toLocaleLowerCase();
+    if (!recipientDirectory) return [];
+    if (!normalizedQuery) return recipientDirectory;
+    return recipientDirectory.filter((user) =>
+      user.name.toLocaleLowerCase().includes(normalizedQuery),
+    );
+  }, [recipientDirectory, recipientQuery]);
   const canRemoveSelectedTrackFromPlaylist = Boolean(
     menuContext?.playlist
       && menuContext.playlist.isEditable !== false
@@ -402,6 +528,7 @@ export function TrackContextMenuProvider({
           className={styles.contextMenu}
           style={{ left: menuPosition.x, top: menuPosition.y }}
           role="menu"
+          key={`menu-${secretVersion}`}
           onMouseDown={(event) => event.stopPropagation()}
         >
           <button type="button" role="menuitem" onClick={playNext}>
@@ -417,6 +544,12 @@ export function TrackContextMenuProvider({
             <span className={styles.menuLabel}>Add to playlist</span>
             <kbd>Ctrl S</kbd>
           </button>
+          {canRecommendSelectedTrack && (
+            <button type="button" role="menuitem" onClick={openRecipientPicker}>
+              <IconGift size={18} aria-hidden="true" />
+              <span className={styles.menuLabel}>Recommend to…</span>
+            </button>
+          )}
           {canDownloadSelectedTrack && track && (
             <button
               type="button"
@@ -448,6 +581,25 @@ export function TrackContextMenuProvider({
               )}
               <span className={styles.menuLabel}>
                 {selectedTrackIsLiked ? "Remove like" : "Like song"}
+              </span>
+            </button>
+          )}
+          {track && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuPosition(null);
+                void toggleSecretShow(track);
+              }}
+            >
+              {isTrackSecret(track.id) ? (
+                <IconEye size={18} aria-hidden="true" />
+              ) : (
+                <IconEyeOff size={18} aria-hidden="true" />
+              )}
+              <span className={styles.menuLabel}>
+                {isTrackSecret(track.id) ? "Show on Discord again" : "Secret Show — hide from Discord"}
               </span>
             </button>
           )}
@@ -550,7 +702,7 @@ export function TrackContextMenuProvider({
                   >
                     <span className={styles.playlistArtwork}>
                       {playlist.artworkUrl ? (
-                        <img src={playlist.artworkUrl} alt="" />
+                        <img src={toCachedArtworkUrl(playlist.artworkUrl)} alt="" />
                       ) : (
                         <IconPlaylist size={24} aria-hidden="true" />
                       )}
@@ -566,6 +718,111 @@ export function TrackContextMenuProvider({
                 ))
               )}
             </div>
+          </section>
+        </div>
+      )}
+
+      {isRecipientPickerOpen && track && (
+        <div
+          className={styles.backdrop}
+          onMouseDown={() => {
+            if (!sendingRecommendation) setIsRecipientPickerOpen(false);
+          }}
+        >
+          <section
+            className={styles.panel}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Recommend ${track.title} to a friend`}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header className={styles.header}>
+              <TrackArtwork
+                className={styles.trackArtwork}
+                artworkUrl={track.artworkUrl}
+                iconSize={24}
+                loading="eager"
+              />
+              <div className={styles.trackText}>
+                <strong>{track.title}</strong>
+                <small>
+                  <ArtistLinks artists={track.artists} fallback={track.artist} />
+                </small>
+              </div>
+              <button
+                type="button"
+                className={styles.closeButton}
+                disabled={sendingRecommendation}
+                onClick={() => setIsRecipientPickerOpen(false)}
+                aria-label="Close recipient picker"
+              >
+                <IconX size={19} />
+              </button>
+            </header>
+
+            <label className={styles.search}>
+              <IconSearch size={18} aria-hidden="true" />
+              <input
+                value={recipientQuery}
+                onChange={(event) => setRecipientQuery(event.target.value)}
+                placeholder="Find an OpenDeck user"
+                aria-label="Find an OpenDeck user"
+              />
+            </label>
+
+            <div className={styles.playlistList}>
+              {recipientDirectoryError ? (
+                <p className={styles.error}>{recipientDirectoryError}</p>
+              ) : recipientDirectory === null ? (
+                <p className={styles.empty}>
+                  <IconLoader2 size={16} aria-hidden="true" /> Loading users…
+                </p>
+              ) : visibleRecipients.length === 0 ? (
+                <p className={styles.empty}>
+                  {recipientQuery
+                    ? "No matching users."
+                    : "No other registered OpenDeck users yet — ask a friend to create an account."}
+                </p>
+              ) : (
+                visibleRecipients.map((user) => {
+                  const alreadySent = sentRecipientIds.includes(user.id);
+                  return (
+                    <button
+                      key={user.id}
+                      type="button"
+                      className={styles.playlist}
+                      disabled={sendingRecommendation}
+                      onClick={() => void sendToRecipient(user)}
+                    >
+                      <span className={styles.playlistArtwork}>
+                        {user.picture ? (
+                          <img src={toCachedArtworkUrl(user.picture)} alt="" />
+                        ) : (
+                          <IconUser size={24} aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className={styles.playlistText}>
+                        <strong>{user.name}</strong>
+                        <span>OpenDeck user</span>
+                      </span>
+                      {alreadySent && <span className={styles.adding}>Sent ✓</span>}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <label className={styles.noteField}>
+              <textarea
+                value={recommendNote}
+                onChange={(event) => setRecommendNote(event.target.value)}
+                placeholder="Add a note (optional)"
+                aria-label="Add a note (optional)"
+                maxLength={200}
+                rows={2}
+                disabled={sendingRecommendation}
+              />
+            </label>
           </section>
         </div>
       )}

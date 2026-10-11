@@ -1,6 +1,7 @@
 import { IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Lyrics } from "../../datasource/types";
+import { toCachedArtworkUrl } from "../../datasource/youtube/artwork";
 import { logInternalWarn } from "../../internal/logging";
 import { playerController, usePlayerState } from "../../player/playerStore";
 import styles from "./LyricsView.module.css";
@@ -123,7 +124,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
   return (
     <section className={styles.view} aria-label="Lyrics">
       <div className={styles.backdrop} aria-hidden="true">
-        {track?.artworkUrl && <img src={track.artworkUrl} alt="" />}
+        {track?.artworkUrl && <img src={toCachedArtworkUrl(track.artworkUrl)} alt="" />}
       </div>
       <header className={styles.header}>
         <span className={styles.eyebrow}>Lyrics</span>

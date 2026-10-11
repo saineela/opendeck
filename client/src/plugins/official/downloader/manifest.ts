@@ -6,25 +6,20 @@ export const DOWNLOADER_PLUGIN_ID = "downloader";
 export const downloaderPluginManifest: PluginManifest = {
   schemaVersion: 1,
   id: DOWNLOADER_PLUGIN_ID,
-  name: "Downloader",
+  name: "Offline audio",
   version: "1.0.0",
   kind: "official",
   entry: "index.js",
   requiresRestart: false,
+  // No `filesystem:write`: offline audio is stored in the browser's IndexedDB
+  // and never written to the user's disk.
   permissions: [
     "tracks:read",
     "playlists:read",
     "downloads:write",
-    "filesystem:write",
     "playback:source-resolver",
   ],
   settings: [
-    {
-      key: "downloadPath",
-      type: "folder",
-      label: "Download folder",
-      required: true,
-    },
     {
       key: "quality",
       type: "select",
@@ -39,7 +34,7 @@ export const downloaderPluginManifest: PluginManifest = {
     {
       key: "rediscoverDownloads",
       type: "action",
-      label: "Rediscover downloads",
+      label: "Verify offline audio",
       action: "rediscoverDownloads",
     },
   ],

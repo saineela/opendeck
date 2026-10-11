@@ -1,7 +1,12 @@
 import express, { type Request, type Response, type Router } from "express";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { Db } from "../db.js";
 import { rateLimit } from "../middleware/rateLimit.js";
+import { fetchAllowlisted } from "../services/safeFetch.js";
+import { recordPlay } from "../services/playHistory.js";
+import { updatePresence } from "../services/discordRpc.js";
+import { isSecretTrack, readPresenceSettings } from "./presence.js";
 import { logger } from "../logger.js";
 
 /**
@@ -28,9 +33,7 @@ function parseStreamUrl(raw: unknown): URL | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== "https:") return null;
-    const host = url.hostname.toLowerCase();
-    const allowed = host === "googlevideo.com" || host.endsWith(".googlevideo.com");
-    if (!allowed) return null;
+    if (!isGooglevideoHost(url.hostname)) return null;
     if (url.pathname !== "/videoplayback") return null;
     return url;
   } catch {
@@ -38,7 +41,71 @@ function parseStreamUrl(raw: unknown): URL | null {
   }
 }
 
-export function createMediaRoutes(): Router {
+function isGooglevideoHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return host === "googlevideo.com" || host.endsWith(".googlevideo.com");
+}
+
+/** Redirect hops must stay on the googlevideo CDN (no SSRF via redirect). */
+function isMediaHopAllowed(url: URL): boolean {
+  return url.protocol === "https:" && isGooglevideoHost(url.hostname);
+}
+
+/**
+ * Optional metadata query params (title, artist, album, artwork, durationSec,
+ * videoId) let callers enrich play history; the CDN URL's `id` param is the
+ * fallback video id. All values are sanitized by the history service.
+ */
+function stringParam(req: Request, name: string): string | undefined {
+  const value = req.query[name];
+  return typeof value === "string" && value ? value.slice(0, 2048) : undefined;
+}
+
+function recordStreamPlay(req: Request, db: Db, url: URL): void {
+  if (!req.sessionUserId) return;
+  const videoId = stringParam(req, "videoId") ?? url.searchParams.get("id") ?? null;
+  if (!videoId) return;
+  const rawDuration = Number(req.query.durationSec);
+  const title = stringParam(req, "title") ?? videoId;
+  const artist = stringParam(req, "artist");
+  const album = stringParam(req, "album");
+  const artworkUrl = stringParam(req, "artwork");
+  recordPlay(db, {
+    userId: req.sessionUserId,
+    videoId,
+    title,
+    artist,
+    album,
+    artworkUrl,
+    durationSeconds: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : null,
+    source: req.authVia === "api-key" ? "api" : "app",
+    apiKeyId: req.apiKeyId ?? null,
+  });
+
+  // A track pulled through the HTTP API is a real listen, so it belongs on
+  // Discord like any other — same opt-in, same per-account settings, and the
+  // same Secret Show exceptions. Fire and forget: presence must never delay
+  // or fail an audio response.
+  if (
+    readPresenceSettings(db, req.sessionUserId).enabled &&
+    !isSecretTrack(db, req.sessionUserId, videoId)
+  ) {
+    void updatePresence({
+      title,
+      artist: artist ?? "",
+      album,
+      artworkUrl,
+      songUrl: undefined,
+      currentTime: 0,
+      duration: Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : undefined,
+      isPlaying: true,
+    }).catch(() => {
+      // Cosmetic; the stream already succeeded.
+    });
+  }
+}
+
+export function createMediaRoutes(db: Db): Router {
   const router = express.Router();
   const limiter = rateLimit({ name: "media", windowMs: 60_000, max: 300 });
 
@@ -62,21 +129,26 @@ export function createMediaRoutes(): Router {
 
     let upstream: globalThis.Response;
     try {
-      upstream = await fetch(url, {
-        headers: upstreamHeaders,
-        signal: AbortSignal.timeout(60_000),
-      });
+      upstream = await fetchAllowlisted(
+        url,
+        { headers: upstreamHeaders, signal: AbortSignal.timeout(60_000) },
+        { isAllowed: isMediaHopAllowed },
+      );
       if (upstream.status === 403) {
         // Retry once with YouTube origin headers; some googlevideo CDN nodes
         // reject bare server-side fetches without them.
-        upstream = await fetch(url, {
-          headers: {
-            ...upstreamHeaders,
-            origin: "https://music.youtube.com",
-            referer: "https://music.youtube.com/",
+        upstream = await fetchAllowlisted(
+          url,
+          {
+            headers: {
+              ...upstreamHeaders,
+              origin: "https://music.youtube.com",
+              referer: "https://music.youtube.com/",
+            },
+            signal: AbortSignal.timeout(60_000),
           },
-          signal: AbortSignal.timeout(60_000),
-        });
+          { isAllowed: isMediaHopAllowed },
+        );
       }
     } catch (error) {
       logger.warn("media.stream fetch failed", { error });
@@ -96,6 +168,8 @@ export function createMediaRoutes(): Router {
         .json({ error: `Audio source returned HTTP ${upstream.status}.` });
       return;
     }
+
+    recordStreamPlay(req, db, url);
 
     res.status(upstream.status);
     for (const header of PASSTHROUGH_HEADERS) {

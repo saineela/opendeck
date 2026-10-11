@@ -3,9 +3,8 @@ import ReactDOM from "react-dom/client";
 import App from "./ui/App";
 import "./ui/styles/global.css";
 import { logInternalError, logInternalInfo } from "./internal/logging";
-import { hydratePaperPcMode } from "./ui/settings/paperPcMode";
+import { applyPaperPcMode } from "./ui/settings/paperPcMode";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
-import { hydrateLastFmSettings } from "./ui/settings/lastfm";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
 import { applyAppTheme, hydrateAppTheme } from "./ui/settings/themes";
 import { applyPlatformAttributes } from "./ui/platform";
@@ -24,6 +23,7 @@ import { refreshAuthSession } from "./auth/authClient";
 logInternalInfo("main.bootstrap start");
 applyPlatformAttributes();
 applyAppTheme();
+applyPaperPcMode();
 registerDownloaderPlugin();
 setDownloaderStreamResolver(resolveDownloadStream);
 
@@ -33,9 +33,7 @@ setDownloaderStreamResolver(resolveDownloadStream);
 void refreshAuthSession()
   .then(() =>
     Promise.all([
-      hydratePaperPcMode(),
       hydratePlayerControlSettings(),
-      hydrateLastFmSettings(),
       hydrateKeyboardShortcuts(),
       hydratePlaybackSettings(),
       hydrateAudioQualitySettings(),

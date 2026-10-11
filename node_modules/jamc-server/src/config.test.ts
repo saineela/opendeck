@@ -15,14 +15,16 @@ const GOOGLE_ENV = {
 };
 
 describe("loadConfig", () => {
-  it("requires Google credentials in production", () => {
-    expect(() =>
-      loadConfig({
-        NODE_ENV: "production",
-        APP_SECRET: "a".repeat(40),
-        DATA_DIR: tempDataDir(),
-      }),
-    ).toThrow(/GOOGLE_CLIENT_ID/);
+  it("does not require Google credentials in production", () => {
+    // Self-hosters can run on email + password alone; Google sign-in is an
+    // optional extra rather than a deployment prerequisite.
+    const config = loadConfig({
+      NODE_ENV: "production",
+      APP_SECRET: "a".repeat(40),
+      DATA_DIR: tempDataDir(),
+    });
+    expect(config.google.configured).toBe(false);
+    expect(config.registration.enabled).toBe(true);
   });
 
   it("requires APP_SECRET in production", () => {
@@ -76,23 +78,35 @@ describe("loadConfig", () => {
     expect(first.appSecret.equals(second.appSecret)).toBe(true);
   });
 
-  it("parses scopes, last.fm config, and flags", () => {
+  it("parses scopes and flags", () => {
     const config = loadConfig({
       NODE_ENV: "test",
       APP_SECRET: "s".repeat(40),
       DATA_DIR: tempDataDir(),
       GOOGLE_OAUTH_SCOPES: "openid , email, ,profile",
-      LASTFM_API_KEY: "lfm-key",
-      LASTFM_API_SECRET: "lfm-secret",
       TRUST_PROXY: "1",
       SERVE_CLIENT: "0",
       PORT: "5173",
     });
     expect(config.google.scopes).toEqual(["openid", "email", "profile"]);
-    expect(config.lastfm.configured).toBe(true);
     expect(config.trustProxy).toBe(true);
     expect(config.serveClient).toBe(false);
     expect(config.port).toBe(5173);
     expect(config.appUrl).toBe("http://localhost:5173");
+  });
+
+  it("falls back to port 4000 for an absent, zero, or malformed PORT", () => {
+    const base = {
+      NODE_ENV: "test" as const,
+      APP_SECRET: "s".repeat(40),
+      DATA_DIR: tempDataDir(),
+    };
+    // PORT=0 (an OS-level default on some machines) would otherwise bind an
+    // ephemeral port and derive a broken OAuth redirect URI.
+    expect(loadConfig({ ...base, PORT: "0" }).port).toBe(4000);
+    expect(loadConfig({ ...base, PORT: "0" }).appUrl).toBe("http://localhost:4000");
+    expect(loadConfig({ ...base, PORT: "" }).port).toBe(4000);
+    expect(loadConfig({ ...base, PORT: "not-a-port" }).port).toBe(4000);
+    expect(loadConfig(base).port).toBe(4000);
   });
 });

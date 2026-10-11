@@ -1,10 +1,10 @@
-import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
+import { ClientType, Constants, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import {
   cancelYouTubeLink,
+  fetchYouTubeLibrary,
   getYouTubeLinkStatus,
   refreshYouTubeLinkedFlag,
-  signInWithGoogle,
   signOut as signOutGoogle,
   startYouTubeLink,
   refreshAuthSession,  unlinkYouTube,
@@ -40,7 +40,7 @@ import {
   usesYouTubeScrobbling,
 } from "../../ui/settings/youtubeAccount";
 
-type ClientLabel = "music" | "web" | "anonymous" | "download";
+type ClientLabel = "music" | "web" | "anonymous" | "download" | "android" | "ios";
 
 type MusicColumn = {
   title?: {
@@ -303,6 +303,8 @@ export class YouTubeMusicDataSource extends DataSource {
   private webClientPromise: Promise<Innertube> | null = null;
   private anonymousClientPromise: Promise<Innertube> | null = null;
   private downloadClientPromise: Promise<Innertube> | null = null;
+  private androidClientPromise: Promise<Innertube> | null = null;
+  private iosClientPromise: Promise<Innertube> | null = null;
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
   private musicSerializedDelegationContext: string | null = null;
@@ -415,6 +417,51 @@ export class YouTubeMusicDataSource extends DataSource {
     return this.anonymousClientPromise;
   }
 
+  /**
+   * The WEB-family clients (WEB, WEB_REMIX, MWEB) stopped returning playable
+   * streaming data without a valid, video-bound po-token — and YouTube now
+   * answers UNPLAYABLE "Video unavailable" when attestation is missing
+   * entirely. The ANDROID/IOS app clients are kept as fallbacks: they often
+   * still serve plain URLs when the web clients are refused. They skip player
+   * retrieval (their URLs are not ciphered) so a fallback costs no extra
+   * player download.
+   */
+  private createMobileClient(type: "android" | "ios"): Promise<Innertube> {
+    const constants = type === "android" ? Constants.CLIENTS.ANDROID : Constants.CLIENTS.IOS;
+    return Innertube.create({
+      fetch: tauriFetch,
+      user_agent: constants.USER_AGENT,
+      client_type: type === "android" ? ClientType.ANDROID : ClientType.IOS,
+      retrieve_player: false,
+      generate_session_locally: true,
+      enable_session_cache: false,
+    });
+  }
+
+  private getAndroidClient(): Promise<Innertube> {
+    if (!this.androidClientPromise) {
+      logInternalInfo("YouTubeMusicDataSource.getAndroidClient creating client");
+      this.androidClientPromise = this.createMobileClient("android").catch((error) => {
+        this.androidClientPromise = null;
+        throw error;
+      });
+    }
+
+    return this.androidClientPromise;
+  }
+
+  private getIosClient(): Promise<Innertube> {
+    if (!this.iosClientPromise) {
+      logInternalInfo("YouTubeMusicDataSource.getIosClient creating client");
+      this.iosClientPromise = this.createMobileClient("ios").catch((error) => {
+        this.iosClientPromise = null;
+        throw error;
+      });
+    }
+
+    return this.iosClientPromise;
+  }
+
   private getDownloadClient(): Promise<Innertube> {
     if (!this.downloadClientPromise) {
       logInternalInfo("YouTubeMusicDataSource.getDownloadClient creating client");
@@ -438,18 +485,11 @@ export class YouTubeMusicDataSource extends DataSource {
     return this.downloadClientPromise;
   }
 
-  private async attestForTrack(client: Innertube, trackId: string): Promise<string | undefined> {
-    const poToken = await mintPoToken(trackId);
-    if (!poToken) return undefined;
-
-    client.session.po_token = poToken;
-    if (client.session.player) client.session.player.po_token = poToken;
-    return poToken;
-  }
-
   private async getClient(label: ClientLabel): Promise<Innertube> {
     if (label === "download") return this.getDownloadClient();
     if (label === "anonymous") return this.getAnonymousClient();
+    if (label === "android") return this.getAndroidClient();
+    if (label === "ios") return this.getIosClient();
     return label === "music" ? this.getMusicClient() : this.getWebClient();
   }
 
@@ -2252,14 +2292,12 @@ export class YouTubeMusicDataSource extends DataSource {
     logInternalInfo("YouTubeMusicDataSource.signIn start");
     this.signedIn = false;
 
-    // Step 1: Google Sign-In for the app account (popup OAuth flow).
-    let session = await refreshAuthSession();
+    // Step 1: the OpenDeck account session gates the whole app (/login),
+    // so an unauthenticated caller here is a programming error, not a
+    // flow to rescue — the QR sign-in lives on the login page.
+    const session = await refreshAuthSession();
     if (!session.authenticated) {
-      await signInWithGoogle();
-      session = await refreshAuthSession();
-      if (!session.authenticated) {
-        throw new Error("Google sign-in did not complete.");
-      }
+      throw new Error("Sign in to your OpenDeck account first.");
     }
 
     // Step 2: link the YouTube Music account via Google's device-code flow.
@@ -2362,6 +2400,75 @@ export class YouTubeMusicDataSource extends DataSource {
     return (await this.refreshLibrary(cacheKey)).value;
   }
 
+  /**
+   * Loads the library through the server's TVHTML5 proxy.
+   *
+   * Returns null when the endpoint is unavailable (older server, network
+   * failure) so the caller can fall back to the in-page WEB_REMIX path.
+   * Throws only for auth-shaped failures that the caller should surface.
+   */
+  private async fetchLibraryFromServer(): Promise<LibrarySnapshot | null> {
+    try {
+      const payload = await fetchYouTubeLibrary();
+      const toTrack = (item: {
+        id: string;
+        title: string;
+        artist: string;
+        artworkUrl?: string;
+        durationSec?: number;
+      }): Track => ({
+        id: item.id,
+        source: "youtube",
+        title: item.title,
+        artist: item.artist,
+        durationSec: item.durationSec,
+        artworkUrl: item.artworkUrl,
+      });
+
+      const likedSongs = payload.likedSongs.map(toTrack);
+      const playlists: Playlist[] = payload.playlists
+        .filter((playlist) => playlist.id !== LIKED_SONGS_PLAYLIST_ID)
+        .map((playlist) => ({
+          id: playlist.id,
+          title: playlist.title,
+          owner: playlist.owner,
+          artworkUrl: playlist.artworkUrl,
+          kind: "playlist",
+          isEditable: false,
+        }));
+
+      return {
+        account: {
+          name: payload.account.name ?? this.musicAccountName,
+          artworkUrl: this.musicAccountArtworkUrl ?? undefined,
+        },
+        albums: payload.albums.map((album) => ({
+          id: album.id,
+          title: album.title,
+          artist: album.artist,
+          artworkUrl: album.artworkUrl,
+        })),
+        playlists,
+        likedSongsPlaylist: {
+          id: LIKED_SONGS_PLAYLIST_ID,
+          title: "Liked Music",
+          owner: "You",
+          artworkUrl: payload.playlists.find((p) => p.id === LIKED_SONGS_PLAYLIST_ID)?.artworkUrl,
+          kind: "liked-songs",
+          isEditable: false,
+        },
+        likedSongs,
+        recentlyPlayed: payload.recentlyPlayed.map(toTrack),
+      };
+    } catch (error) {
+      // 409 = nothing linked (the caller already checked), 401 = signed out:
+      // both mean "use the normal path" rather than a hard failure.
+      const message = error instanceof Error ? error.message : String(error);
+      logInternalWarn("YouTubeMusicDataSource.fetchLibraryFromServer failed", { error: message });
+      return null;
+    }
+  }
+
   private hasLibraryContent(library: LibrarySnapshot): boolean {
     return library.albums.length > 0
       || library.playlists.length > 0
@@ -2388,7 +2495,25 @@ export class YouTubeMusicDataSource extends DataSource {
       accountIndex: this.musicAccountIndex,
     });
     if (!this.signedIn) {
-      throw new Error("Sign in is required to load the YouTube Music library.");
+      throw new Error(
+        "Your YouTube Music account is not connected yet. Open Settings → Account and use \"Connect YouTube Music\" first.",
+      );
+    }
+
+    // The browser cannot read its own library: an OAuth token is rejected by
+    // WEB_REMIX (the client a browser sends) with 400, so the server performs
+    // the read with TVHTML5 and returns plain JSON. Fall through to the legacy
+    // in-page path only when that endpoint is unavailable.
+    const fromServer = await this.fetchLibraryFromServer();
+    if (fromServer) {
+      await this.cachePlaylistTracks(LIKED_SONGS_PLAYLIST_ID, fromServer.likedSongs);
+      logInternalInfo("YouTubeMusicDataSource.getLibrary via server", {
+        albumCount: fromServer.albums.length,
+        playlistCount: fromServer.playlists.length,
+        likedSongCount: fromServer.likedSongs.length,
+        recentTrackCount: fromServer.recentlyPlayed.length,
+      });
+      return fromServer;
     }
 
     let client = await this.getMusicClient();
@@ -3708,7 +3833,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private getLyricsRequestHeaders(): Record<string, string> {
     return {
       Accept: "application/json",
-      "User-Agent": "JustAnotherMusicClient/0.1.0",
+      "User-Agent": "OpenDeck/1.0.0",
     };
   }
 
@@ -4324,14 +4449,34 @@ export class YouTubeMusicDataSource extends DataSource {
   ): Promise<{ url: string; mimeType: string; cookie?: string }> {
     let streamUrl: string | null = null;
     let streamMimeType = "audio/mp4";
+    const failures: string[] = [];
+
+    // Mint the po-token once per track and attach it to every client that
+    // attempts playback. YouTube withholds streaming URLs entirely (empty
+    // `url` on all formats) for requests without a valid, video-bound
+    // attestation — on every InnerTube client, not just the web ones.
+    const poToken = await mintPoToken(track.id);
 
     for (const label of clientOrder) {
       try {
         const yt = await this.getClient(label);
-        // Every playback client now needs a po-token on the resolved URL;
-        // without it googlevideo answers 403 on server-side fetches.
-        const poToken = await this.attestForTrack(yt, track.id);
+        if (poToken) {
+          yt.session.po_token = poToken;
+          if (yt.session.player) yt.session.player.po_token = poToken;
+        }
         const info = await yt.getBasicInfo(track.id, poToken ? { po_token: poToken } : undefined);
+        const urlLessFormats = (info.streaming_data?.adaptive_formats ?? []).length;
+        if (urlLessFormats > 0 && !info.streaming_data?.adaptive_formats?.some(
+          (candidate: any) => (typeof candidate.url === "string" && candidate.url.length > 0)
+            || typeof candidate.signature_cipher === "string"
+            || typeof candidate.cipher === "string",
+        )) {
+          // YouTube withholds both plain and ciphered URLs when it rejects
+          // the request's attestation — formats arrive metadata-only.
+          throw new Error(
+            "YouTube returned metadata-only formats (attestation not accepted for this client).",
+          );
+        }
         const audioFormats = (info.streaming_data?.adaptive_formats ?? []).filter(
           (candidate: any) => typeof candidate.mime_type === "string"
             && candidate.mime_type.startsWith("audio/"),
@@ -4371,10 +4516,12 @@ export class YouTubeMusicDataSource extends DataSource {
         });
         break;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push(`${label}: ${message}`);
         logInternalWarn("YouTubeMusicDataSource.resolveStream client failed", {
           trackId: track.id,
           client: label,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         });
       }
     }
@@ -4383,9 +4530,11 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalError(
         "YouTubeMusicDataSource.resolveStream failed",
         new Error("No YouTube client returned a playable audio URL."),
-        { trackId: track.id },
+        { trackId: track.id, failures },
       );
-      throw new Error("Unable to resolve a playable YouTube audio stream.");
+      throw new Error(
+        `Unable to resolve a playable YouTube audio stream. (${failures.slice(-2).join("; ")})`,
+      );
     }
 
     return {
@@ -4399,9 +4548,14 @@ export class YouTubeMusicDataSource extends DataSource {
     track: Track,
     quality: AudioQuality = getStreamingQuality(),
   ): Promise<{ url: string; mimeType: string; cookie?: string }> {
+    // The attested web clients run first — they are the proven path when
+    // BotGuard attestation succeeds (the mobile clients then cost nothing).
+    // ANDROID/IOS rescue playback when YouTube refuses the web clients;
+    // linked accounts keep the music client in front so authenticated
+    // playback/reporting wins when YouTube honors it.
     const order: ClientLabel[] = usesAuthenticatedStreaming()
-      ? ["music", "web", "anonymous"]
-      : ["anonymous", "web", "music"];
+      ? ["music", "web", "android", "ios", "anonymous"]
+      : ["anonymous", "web", "music", "android", "ios"];
     return this.resolveStream(track, quality, order);
   }
 
@@ -4415,7 +4569,7 @@ export class YouTubeMusicDataSource extends DataSource {
 
     // Downloads should not be governed by the playback engine preference. Try the authenticated
     // download client first, then fall back through the same clients used for playback.
-    return this.resolveStream(track, quality, ["download", "music", "web", "anonymous"]);
+    return this.resolveStream(track, quality, ["download", "music", "web", "anonymous", "android", "ios"]);
   }
 
   async beginPlayReport(track: Track): Promise<boolean> {
@@ -4612,7 +4766,14 @@ export class YouTubeMusicDataSource extends DataSource {
     });
     return {
       mimeType: streamMimeType,
-      sourceUrl: buildMediaStreamUrl(streamUrl),
+      sourceUrl: buildMediaStreamUrl(streamUrl, {
+        videoId: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        artwork: track.artworkUrl,
+        durationSec: track.durationSec,
+      }),
     };
   }
 }

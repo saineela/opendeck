@@ -1,0 +1,14 @@
+.qr {
+  display: block;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--color-border);
+}
+
+/* Fixed dark-on-light in every theme: camera scanners need the contrast. */
+.background {
+  fill: #ffffff;
+}
+
+.modules {
+  fill: #101014;
+}

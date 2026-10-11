@@ -94,6 +94,22 @@ export function getArtworkUrlCandidates(url?: string): string[] {
   });
 }
 
+/**
+ * Rewrites an artwork URL to the server's image cache (`GET /api/artwork`).
+ *
+ * Every `<img>` in the app loads through here so one copy of a thumbnail lives
+ * on the server instead of one per browser: the origin fetch happens once per
+ * instance, and switching devices no longer re-downloads the library art.
+ *
+ * Anything that is not an absolute https URL (blob:, data:, app-relative) is
+ * returned untouched — those are already local or are not fetchable origins.
+ */
+export function toCachedArtworkUrl(url: string): string {
+  const normalized = normalizeArtworkUrl(url);
+  if (!normalized.startsWith("https://")) return url;
+  return `/api/artwork?url=${encodeURIComponent(normalized)}`;
+}
+
 export function getVideoArtworkFallback(videoId: string): string | undefined {
   return /^[A-Za-z0-9_-]{11}$/.test(videoId)
     ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
