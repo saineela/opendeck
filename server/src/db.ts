@@ -251,6 +251,16 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX image_cache_last_used_idx ON image_cache(last_used);
   `,
+  // v8 — server-side TOTP challenges are bound to a random nonce and consumed
+  // atomically so a successful second-factor proof cannot be replayed.
+  `
+  CREATE TABLE totp_login_challenges (
+    nonce TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX totp_login_challenges_expires_idx ON totp_login_challenges(expires_at);
+  `,
 ];
 
 function migrate(db: Db): void {

@@ -374,22 +374,38 @@ describe("TOTP two-step verification", () => {
       expect(wrongCode.status).toBe(401);
       expect(wrongCode.headers.getSetCookie()).toHaveLength(0);
 
-      const goodCode = await jsonPost(running.base, "/api/auth/login/totp", {
-        challenge: challenge.challenge,
-        code: generateTotpCode(enrollment.secret),
-      });
-      expect(goodCode.status).toBe(200);
-      expect(goodCode.headers.getSetCookie().join(";")).toContain("od_sid=");
+      const validCode = generateTotpCode(enrollment.secret);
+      const concurrentAttempts = await Promise.all([
+        jsonPost(running.base, "/api/auth/login/totp", {
+          challenge: challenge.challenge,
+          code: validCode,
+        }),
+        jsonPost(running.base, "/api/auth/login/totp", {
+          challenge: challenge.challenge,
+          code: validCode,
+        }),
+      ]);
+      expect(concurrentAttempts.map((response) => response.status).sort()).toEqual([200, 401]);
+      const successfulAttempt = concurrentAttempts.find((response) => response.status === 200);
+      const rejectedReplay = concurrentAttempts.find((response) => response.status === 401);
+      expect(successfulAttempt?.headers.getSetCookie().join(";")).toContain("od_sid=");
+      expect(rejectedReplay?.headers.getSetCookie()).toHaveLength(0);
 
-      // Backup codes work exactly once.
+      // Backup codes remain single-use even when the user starts a fresh challenge.
       const backup = backupCodes[0]!;
+      const backupStep1 = await jsonPost(running.base, "/api/auth/login", account);
+      expect(backupStep1.status).toBe(200);
+      const backupChallenge = (await backupStep1.json()) as { challenge: string };
       const backupLogin = await jsonPost(running.base, "/api/auth/login/totp", {
-        challenge: challenge.challenge,
+        challenge: backupChallenge.challenge,
         code: backup,
       });
       expect(backupLogin.status).toBe(200);
+      const replayStep1 = await jsonPost(running.base, "/api/auth/login", account);
+      expect(replayStep1.status).toBe(200);
+      const replayChallenge = (await replayStep1.json()) as { challenge: string };
       const replayed = await jsonPost(running.base, "/api/auth/login/totp", {
-        challenge: challenge.challenge,
+        challenge: replayChallenge.challenge,
         code: backup,
       });
       expect(replayed.status).toBe(401);

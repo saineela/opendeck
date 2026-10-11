@@ -389,7 +389,12 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
     }
 
     if (account.totp_enabled === 1 && account.totp_secret) {
-      const payload = `${account.id}:${now + TOTP_CHALLENGE_TTL_MS}`;
+      const expiresAt = now + TOTP_CHALLENGE_TTL_MS;
+      const nonce = crypto.randomBytes(32).toString("base64url");
+      db.prepare("INSERT INTO totp_login_challenges (nonce, user_id, expires_at) VALUES (?, ?, ?)")
+        .run(nonce, account.id, expiresAt);
+      db.prepare("DELETE FROM totp_login_challenges WHERE expires_at <= ?").run(now);
+      const payload = `${account.id}:${expiresAt}:${nonce}`;
       res.json({
         status: "totp_required",
         challenge: signValue(config, payload),
@@ -416,9 +421,9 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
       generic();
       return;
     }
-    const [userId, expiresAtRaw] = signed.split(":");
+    const [userId, expiresAtRaw, nonce] = signed.split(":");
     const expiresAt = Number(expiresAtRaw);
-    if (!userId || !Number.isFinite(expiresAt) || expiresAt < Date.now()) {
+    if (!userId || !Number.isFinite(expiresAt) || expiresAt < Date.now() || !nonce) {
       generic();
       return;
     }
@@ -437,16 +442,11 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
     const submitted = req.body?.code;
     const usingBackup = typeof submitted === "string" && !/^\d{6}$/.test(submitted.replace(/\s+/g, ""));
 
+    let remainingBackupCodes: string[] | null = null;
     let passed = false;
     if (usingBackup) {
-      const remaining = consumeBackupCode(storedCodes, submitted);
-      if (remaining) {
-        passed = true;
-        db.prepare("UPDATE users SET totp_backup_codes = ? WHERE id = ?").run(
-          JSON.stringify(remaining),
-          account.id,
-        );
-      }
+      remainingBackupCodes = consumeBackupCode(storedCodes, submitted);
+      passed = remainingBackupCodes !== null;
     } else {
       passed = verifyTotp(account.totp_secret, submitted);
     }
@@ -461,6 +461,28 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
       );
       generic();
       return;
+    }
+
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const consumed = db.prepare(
+        "DELETE FROM totp_login_challenges WHERE nonce = ? AND user_id = ? AND expires_at > ?",
+      ).run(nonce, account.id, Date.now());
+      if (Number(consumed.changes) !== 1) {
+        db.exec("ROLLBACK");
+        generic();
+        return;
+      }
+      if (remainingBackupCodes) {
+        db.prepare("UPDATE users SET totp_backup_codes = ? WHERE id = ?").run(
+          JSON.stringify(remainingBackupCodes),
+          account.id,
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
     }
 
     startSession(res, account.id);
