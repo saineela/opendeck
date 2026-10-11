@@ -428,57 +428,58 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
       return;
     }
 
-    const account = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as AccountRow | undefined;
-    if (!account || !account.totp_secret || account.totp_enabled !== 1) {
-      generic();
-      return;
-    }
-    if (account.locked_until && account.locked_until > Date.now()) {
-      jsonError(res, 429, "Too many failed attempts. Try again later.");
-      return;
-    }
-
-    const storedCodes = JSON.parse(account.totp_backup_codes || "[]") as string[];
     const submitted = req.body?.code;
     const usingBackup = typeof submitted === "string" && !/^\d{6}$/.test(submitted.replace(/\s+/g, ""));
 
-    let remainingBackupCodes: string[] | null = null;
-    let passed = false;
-    if (usingBackup) {
-      remainingBackupCodes = consumeBackupCode(storedCodes, submitted);
-      passed = remainingBackupCodes !== null;
-    } else {
-      passed = verifyTotp(account.totp_secret, submitted);
-    }
-
-    if (!passed) {
-      const failed = account.failed_logins + 1;
-      const lockedUntil = failed >= MAX_FAILED_LOGINS ? Date.now() + LOCK_DURATION_MS : null;
-      db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(
-        failed,
-        lockedUntil,
-        account.id,
-      );
-      generic();
-      return;
-    }
-
     db.exec("BEGIN IMMEDIATE");
+    let account: AccountRow;
     try {
+      const currentAccount = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as AccountRow | undefined;
+      if (!currentAccount || !currentAccount.totp_secret || currentAccount.totp_enabled !== 1) {
+        db.exec("ROLLBACK");
+        generic();
+        return;
+      }
+      account = currentAccount;
+      if (account.locked_until && account.locked_until > Date.now()) {
+        db.exec("ROLLBACK");
+        jsonError(res, 429, "Too many failed attempts. Try again later.");
+        return;
+      }
+
+      const storedCodes = JSON.parse(account.totp_backup_codes || "[]") as string[];
+      const remainingBackupCodes = usingBackup
+        ? consumeBackupCode(storedCodes, submitted)
+        : null;
+      const passed = usingBackup
+        ? remainingBackupCodes !== null
+        : verifyTotp(currentAccount.totp_secret, submitted);
+
+      if (!passed) {
+        const failed = account.failed_logins + 1;
+        const lockedUntil = failed >= MAX_FAILED_LOGINS ? Date.now() + LOCK_DURATION_MS : null;
+        db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(
+          failed,
+          lockedUntil,
+          account.id,
+        );
+        db.exec("COMMIT");
+        generic();
+        return;
+      }
+
       const consumed = db.prepare(
-        "DELETE FROM totp_login_challenges WHERE nonce = ? AND user_id = ? AND expires_at > ?",
-      ).run(nonce, account.id, Date.now());
+        "DELETE FROM totp_login_challenges WHERE nonce = ? AND user_id = ? AND expires_at = ? AND expires_at > ?",
+      ).run(nonce, account.id, expiresAt, Date.now());
       if (Number(consumed.changes) !== 1) {
         db.exec("ROLLBACK");
         generic();
         return;
       }
-      if (remainingBackupCodes) {
-        db.prepare("UPDATE users SET totp_backup_codes = ? WHERE id = ?").run(
-          JSON.stringify(remainingBackupCodes),
-          account.id,
-        );
-      }
+
+      db.prepare(
+        "UPDATE users SET totp_backup_codes = ?, failed_logins = 0, locked_until = NULL WHERE id = ?",
+      ).run(JSON.stringify(remainingBackupCodes ?? storedCodes), account.id);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");

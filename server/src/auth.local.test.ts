@@ -393,22 +393,18 @@ describe("TOTP two-step verification", () => {
 
       // Backup codes remain single-use even when the user starts a fresh challenge.
       const backup = backupCodes[0]!;
-      const backupStep1 = await jsonPost(running.base, "/api/auth/login", account);
-      expect(backupStep1.status).toBe(200);
-      const backupChallenge = (await backupStep1.json()) as { challenge: string };
-      const backupLogin = await jsonPost(running.base, "/api/auth/login/totp", {
-        challenge: backupChallenge.challenge,
-        code: backup,
-      });
-      expect(backupLogin.status).toBe(200);
-      const replayStep1 = await jsonPost(running.base, "/api/auth/login", account);
-      expect(replayStep1.status).toBe(200);
-      const replayChallenge = (await replayStep1.json()) as { challenge: string };
-      const replayed = await jsonPost(running.base, "/api/auth/login/totp", {
-        challenge: replayChallenge.challenge,
-        code: backup,
-      });
-      expect(replayed.status).toBe(401);
+      const backupChallenges = await Promise.all([0, 1].map(async () => {
+        const login = await jsonPost(running.base, "/api/auth/login", account);
+        expect(login.status).toBe(200);
+        return (await login.json()) as { challenge: string };
+      }));
+      const backupAttempts = await Promise.all(backupChallenges.map(({ challenge: backupChallenge }) =>
+        jsonPost(running.base, "/api/auth/login/totp", {
+          challenge: backupChallenge,
+          code: backup,
+        }),
+      ));
+      expect(backupAttempts.map((response) => response.status).sort()).toEqual([200, 401]);
 
       const after = await fetch(`${running.base}/api/auth/totp/status`, { headers: { cookie } });
       expect(await after.json()).toMatchObject({ enabled: true, backupCodesRemaining: 9 });
@@ -479,6 +475,53 @@ describe("TOTP two-step verification", () => {
 });
 
 describe("account lockout", () => {
+  it("resets the failure counter only after the TOTP challenge succeeds", async () => {
+    await withApp({}, async ({ running, db }) => {
+      const account = { email: "totp-reset@example.com", password: GOOD_PASSWORD };
+      const created = await register(running.base, account);
+      const cookie = cookieHeader(created);
+      const setup = await fetch(`${running.base}/api/auth/totp/setup`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: "{}",
+      });
+      const { secret } = (await setup.json()) as { secret: string };
+      const enabled = await jsonPost(running.base, "/api/auth/totp/enable", {
+        code: generateTotpCode(secret),
+      }, cookie);
+      expect(enabled.status).toBe(200);
+
+      db.prepare("UPDATE users SET failed_logins = 7 WHERE email = ?").run(account.email);
+      const passwordStep = await jsonPost(running.base, "/api/auth/login", account);
+      expect(passwordStep.status).toBe(200);
+      const { challenge } = (await passwordStep.json()) as { challenge: string };
+      const afterPasswordStep = db.prepare("SELECT failed_logins FROM users WHERE email = ?")
+        .get(account.email) as { failed_logins: number };
+      expect(afterPasswordStep.failed_logins).toBe(7);
+
+      const failedSecondFactor = await jsonPost(running.base, "/api/auth/login/totp", {
+        challenge,
+        code: "000000",
+      });
+      expect(failedSecondFactor.status).toBe(401);
+      const afterFailedSecondFactor = db.prepare("SELECT failed_logins FROM users WHERE email = ?")
+        .get(account.email) as { failed_logins: number };
+      expect(afterFailedSecondFactor.failed_logins).toBe(8);
+
+      const retry = await jsonPost(running.base, "/api/auth/login", account);
+      expect(retry.status).toBe(200);
+      const retryChallenge = (await retry.json()) as { challenge: string };
+      const completed = await jsonPost(running.base, "/api/auth/login/totp", {
+        challenge: retryChallenge.challenge,
+        code: generateTotpCode(secret),
+      });
+      expect(completed.status).toBe(200);
+      const afterCompleteSignIn = db.prepare("SELECT failed_logins, locked_until FROM users WHERE email = ?")
+        .get(account.email) as { failed_logins: number; locked_until: number | null };
+      expect(afterCompleteSignIn).toEqual({ failed_logins: 0, locked_until: null });
+    });
+  });
+
   it("locks on the tenth consecutive failure", async () => {
     await withApp({}, async ({ running, db }) => {
       const account = { email: "frank@example.com", password: GOOD_PASSWORD };
