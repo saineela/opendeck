@@ -26,7 +26,7 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci
 
 COPY . .
-RUN npm run build && npm run build:test-app
+RUN npm run build
 
 
 FROM node:24-alpine AS runtime
@@ -44,13 +44,15 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Compiled artifacts from the build stage. Paths must line up with the
-# server's relative lookups: `server/dist` → `../../client/dist` and
-# `../../test-app`.
+# server's relative lookup: `server/dist` → `../../client/dist`.
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
-COPY --from=build /app/test-app ./test-app
 # Rendered as the public /docs API reference page.
 COPY --from=build /app/docs ./docs
+# Public env template — served as the /docs/.env.example companion page.
+COPY --from=build /app/.env.example ./
+# Apache-2.0 requires LICENSE and NOTICE to ship with a binary distribution.
+COPY --from=build /app/LICENSE /app/NOTICE ./
 
 # SQLite (and the generated dev secret, if ever created) live on a volume.
 RUN mkdir -p /data && chown -R node:node /app /data

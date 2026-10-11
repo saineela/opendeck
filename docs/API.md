@@ -9,8 +9,6 @@ scrobble.
 - Companion guides: [INTEGRATION.md](INTEGRATION.md) (system integration,
   deployment, flows), [openapi.yaml](openapi.yaml) (machine-readable spec),
   [FEATURE_INVENTORY.md](FEATURE_INVENTORY.md) (feature audit).
-- Reference client: the bare test client served at `/test-app/` — it exercises
-  every endpoint below and shows every request it makes.
 
 ---
 
@@ -947,8 +945,7 @@ audio.addEventListener("timeupdate", () => { /* real-time position */ });
 
 `streamUrl` is a deciphered googlevideo URL produced by stream resolution
 (quality selection + po-token attestation) — see
-[INTEGRATION.md §5](INTEGRATION.md#5-playback-pipeline) and the reference
-engine in `test-app/vendor/engine.js`.
+[INTEGRATION.md §5](INTEGRATION.md#5-playback-pipeline).
 
 ---
 
@@ -1144,7 +1141,6 @@ are untouched.
 | Path | Serving |
 |---|---|
 | `/api/*` (unmatched) | `404 {"error":"Not found."}` |
-| `/test-app/` | Bare API test client (always on) |
 | `/*` (non-`/api`) | Built SPA `client/dist` with HTML5 fallback, when `SERVE_CLIENT≠0` and `npm run build` has run; `assets/*` are immutable-cached |
 | `/docs` | This page — rendered as static HTML server-side (no JS); falls back to JSON 500 if the file is missing |
 

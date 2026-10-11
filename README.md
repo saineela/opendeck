@@ -2,14 +2,16 @@
   <img width="831px" src="assets/img/opendeck-logo.png" alt="OpenDeck logo" />
 </p>
 <p align="center">
-  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/releases/latest"><img src="https://img.shields.io/github/downloads/saineela/JustAnotherMusicClient-WebApp/total?style=for-the-badge&color=FF0000&label=downloads" alt="Downloads"></a>
-  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/blob/main/webapp/package.json"><img src="https://img.shields.io/badge/version-1.0.0-ff3d00?style=for-the-badge" alt="Version"></a>
-  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-ff6900?style=for-the-badge" alt="License"></a>
-  <a href="https://github.com/saineela/JustAnotherMusicClient-WebApp"><img src="https://img.shields.io/github/stars/saineela/JustAnotherMusicClient-WebApp?style=for-the-badge&color=ff9700&label=stars" alt="Stars"></a>
+  <a href="https://github.com/saineela/opendeck/releases/latest"><img src="https://img.shields.io/github/downloads/saineela/opendeck/total?style=for-the-badge&color=FF0000&label=downloads" alt="Downloads"></a>
+  <a href="https://github.com/saineela/opendeck/blob/master/package.json"><img src="https://img.shields.io/badge/version-1.0.0-ff3d00?style=for-the-badge" alt="Version"></a>
+  <a href="https://github.com/saineela/opendeck/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-ff6900?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/saineela/opendeck"><img src="https://img.shields.io/github/stars/saineela/opendeck?style=for-the-badge&color=ff9700&label=stars" alt="Stars"></a>
 </p>
 <br>
 
 A **self-hosted, multi-user** music client for YouTube Music, built with React, TypeScript, Express, and SQLite — for **Windows, macOS & Linux** through any browser.
+
+OpenDeck is an independent open-source software project intended for development, experimentation, and self-hosted use. Users are responsible for ensuring that their use of the software and any third-party content complies with applicable laws and service terms.
 
 <br>
 
@@ -55,8 +57,8 @@ If you like this project, **starring it on GitHub** helps a lot!
 ### Docker (recommended)
 
 ```bash
-git clone https://github.com/saineela/JustAnotherMusicClient-WebApp.git
-cd JustAnotherMusicClient-WebApp/webapp
+git clone https://github.com/saineela/opendeck.git
+cd opendeck
 docker compose up -d
 ```
 
@@ -67,8 +69,8 @@ Then open `http://localhost:4000` — the first account created becomes the admi
 Requires **Node.js LTS** and npm.
 
 ```bash
-git clone https://github.com/saineela/JustAnotherMusicClient-WebApp.git
-cd JustAnotherMusicClient-WebApp/webapp
+git clone https://github.com/saineela/opendeck.git
+cd opendeck
 npm install
 npm run build
 npm start          # serves the app + API on http://localhost:4000
@@ -87,6 +89,13 @@ Server configuration lives in environment variables (see `.env` and `webapp/serv
 </p>
 
 ## Roadmap 📌
+
+- Crossfade and a Web Audio equalizer (borrowed from how good modern clients do it)
+- Last.fm scrobbling
+- Multi-source lyrics with scored matching (LRCLIB, Genius) instead of a single provider
+- SponsorBlock integration
+- Playlist import/export (Spotify/YouTube Music links)
+- Mobile PWA installability and offline shell
 - ~~Discord Rich Presence~~
 - ~~Secret Show (private listening exceptions)~~
 - ~~Admin instance theme~~
@@ -103,6 +112,22 @@ OpenDeck is a web app: it runs on **any OS** where Node.js or Docker runs — Wi
 - **Reverse proxy?** Set `TRUST_PROXY=1` so rate limits and lockouts see real client IPs.
 - **Backups** are simple: stop the container, copy the data directory (`app.db` holds everything).
 - **First-run setup**: visiting with zero accounts shows the admin creation screen; afterwards registration follows `ALLOW_REGISTRATION` and the admin panel switch.
+
+## Disclaimer ⚠️
+
+**How you use this software is entirely your choice — and your responsibility.**
+Whatever you do with OpenDeck, whoever you share it with, and wherever you run
+it is on you. The author is **not responsible** for how this software is used
+and accepts **no responsibility** for any legal situations, claims, penalties,
+or other issues that may arise from your use of this project.
+
+If you host OpenDeck **publicly**, be **extremely careful** about the Terms of
+Service of your hosting provider — and about YouTube's terms, which apply to
+what the software retrieves (see [Legal](#legal)). Check what your provider
+allows **before** you deploy: providers may throttle, suspend, or terminate
+accounts and services for the traffic or content this software can generate.
+The author is not responsible for consequences of hosting this project,
+including account or service termination by your provider.
 
 ## Legal
 
@@ -184,7 +209,7 @@ npm run test:e2e   # Playwright end-to-end
 ### Repository layout
 
 ```
-webapp/
+opendeck/
 ├── client/          # React + Vite SPA (player, UI, datasources, plugins)
 ├── server/          # Express + better-sqlite3 (auth, library, cache, API, Discord bridge)
 ├── docs/            # API.md, INTEGRATION.md, openapi.yaml, FEATURE_INVENTORY.md
