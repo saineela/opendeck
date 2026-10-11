@@ -1,6 +1,8 @@
 # Secrets and local config must never enter the build context.
 .env
 .env.*
+# …but the public template IS shipped: the runtime serves it at /docs/env.
+!.env.example
 client/.env.*
 server/.env.*
 
