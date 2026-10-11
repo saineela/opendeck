@@ -371,13 +371,38 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
 
     const ok = await verifyPassword(password, account.password_hash);
     if (!ok) {
-      const failed = account.failed_logins + 1;
-      const lockedUntil = failed >= MAX_FAILED_LOGINS ? now + LOCK_DURATION_MS : null;
-      db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(
-        failed,
-        lockedUntil,
-        account.id,
-      );
+      db.exec("BEGIN IMMEDIATE");
+      let failed: number;
+      let lockedUntil: number | null;
+      try {
+        const latest = db.prepare("SELECT failed_logins, locked_until FROM users WHERE id = ?")
+          .get(account.id) as { failed_logins: number; locked_until: number | null } | undefined;
+        if (!latest) {
+          db.exec("ROLLBACK");
+          generic();
+          return;
+        }
+        if (latest.locked_until && latest.locked_until > Date.now()) {
+          const retryAfter = Math.ceil((latest.locked_until - Date.now()) / 1000);
+          db.exec("ROLLBACK");
+          res.setHeader("Retry-After", String(retryAfter));
+          jsonError(res, 429, "Too many failed attempts. Try again later.");
+          return;
+        }
+
+        failed = latest.failed_logins + 1;
+        lockedUntil = failed >= MAX_FAILED_LOGINS ? Date.now() + LOCK_DURATION_MS : null;
+        db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(
+          failed,
+          lockedUntil,
+          account.id,
+        );
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+
       if (lockedUntil) {
         logger.warn("auth.login locked", { userId: account.id, failed });
         res.setHeader("Retry-After", String(Math.ceil(LOCK_DURATION_MS / 1000)));

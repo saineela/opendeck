@@ -572,6 +572,28 @@ describe("account lockout", () => {
     });
   });
 
+  it("increments the lockout counter for concurrent bad-password attempts", async () => {
+    await withApp({}, async ({ running, db }) => {
+      const account = { email: "concurrent-lockout@example.com", password: GOOD_PASSWORD };
+      await register(running.base, account);
+      db.prepare("UPDATE users SET failed_logins = 3 WHERE email = ?").run(account.email);
+
+      const attempts = await Promise.all(Array.from({ length: 7 }, () =>
+        jsonPost(running.base, "/api/auth/login", {
+          email: account.email,
+          password: "incorrect password",
+        }),
+      ));
+      expect(attempts.map((response) => response.status).sort()).toEqual([
+        401, 401, 401, 401, 401, 401, 429,
+      ]);
+      const row = db.prepare("SELECT failed_logins, locked_until FROM users WHERE email = ?")
+        .get(account.email) as { failed_logins: number; locked_until: number | null };
+      expect(row.failed_logins).toBe(10);
+      expect(row.locked_until).toBeGreaterThan(Date.now());
+    });
+  });
+
   it("clears the counter on a successful sign-in", async () => {
     await withApp({}, async ({ running, db }) => {
       const account = { email: "heidi@example.com", password: GOOD_PASSWORD };
