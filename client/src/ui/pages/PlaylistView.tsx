@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowDown,
   IconArrowUp,
@@ -66,15 +66,6 @@ function getTrackRenderKey(track: Track, index: number): string {
   return track.playlistItemId ?? `${track.id}:${index}`;
 }
 
-function getUniqueNewTracks(current: Track[], next: Track[]): Track[] {
-  const existingIds = new Set(current.map((track) => track.id));
-  return next.filter((track) => {
-    if (existingIds.has(track.id)) return false;
-    existingIds.add(track.id);
-    return true;
-  });
-}
-
 function PlaylistLoadingSpinner({ label }: { label: string }) {
   return (
     <div className={styles.loadingState} role="status" aria-live="polite" aria-label={label}>
@@ -89,21 +80,13 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const keyboardShortcuts = useKeyboardShortcuts();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [hasMoreTracks, setHasMoreTracks] = useState(false);
-  const [nextPageKey, setNextPageKey] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [enteringTrackKeys, setEnteringTrackKeys] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<PlaylistSort>("dateAdded");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState("");
   const [dropTargetIndex, setDropTargetIndex] = useState<{ localPath: string; insertAfter: boolean } | null>(null);
-  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const playlistSearchInputRef = useRef<HTMLInputElement | null>(null);
-  const playlistIdRef = useRef<string | undefined>(undefined);
-  const isLoadingMoreRef = useRef(false);
-  const tracksRef = useRef<Track[]>([]);
   const pointerDragRef = useRef<{
     pointerId: number;
     localPath: string;
@@ -112,10 +95,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   } | null>(null);
   const dropTargetRef = useRef<{ localPath: string; insertAfter: boolean } | null>(null);
   const suppressClickRef = useRef(false);
-
-  playlistIdRef.current = playlist?.id;
-  isLoadingMoreRef.current = isLoadingMore;
-  tracksRef.current = tracks;
 
   const isLocalPlaylistView = playlist ? isLocalPlaylist(playlist) : false;
 
@@ -127,30 +106,24 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     setPlaylistSearchQuery("");
     setTracks([]);
     setIsLoading(true);
-    setIsLoadingMore(false);
-    setHasMoreTracks(false);
-    setNextPageKey(undefined);
     setError(null);
-    setLoadMoreError(null);
     setEnteringTrackKeys(new Set());
-    let showedPage = false;
-    const showPage = (page: { tracks: Track[]; hasMore: boolean; nextPageKey?: string }) => {
+    let showedTracks = false;
+    const showTracks = (nextTracks: Track[]) => {
       if (!active) return;
-      showedPage = true;
-      setTracks(page.tracks);
-      setEnteringTrackKeys(new Set(page.tracks.map(getTrackKey)));
-      setHasMoreTracks(page.hasMore);
-      setNextPageKey(page.nextPageKey);
+      showedTracks = true;
+      setTracks(nextTracks);
+      setEnteringTrackKeys(new Set(nextTracks.map(getTrackKey)));
       setIsLoading(false);
     };
-    void libraryController.getPlaylistTrackPage(playlist, undefined, (page) => {
-      if (page.tracks.length > 0) showPage(page);
+    void libraryController.getPlaylistTracks(playlist, (updatedTracks) => {
+      if (updatedTracks.length > 0) showTracks(updatedTracks);
     })
-      .then((page) => {
-        showPage(page);
+      .then((loadedTracks) => {
+        showTracks(loadedTracks);
       })
       .catch(() => {
-        if (active && !showedPage) setError("Unable to load this playlist.");
+        if (active && !showedTracks) setError("Unable to load this playlist.");
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -159,56 +132,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       active = false;
     };
   }, [playlist, libraryController]);
-
-  const loadMoreTracks = useCallback(async () => {
-    if (!playlist || !hasMoreTracks || !nextPageKey || isLoading || isLoadingMoreRef.current) return;
-    const loadingPlaylistId = playlist.id;
-    isLoadingMoreRef.current = true;
-    setIsLoadingMore(true);
-    setLoadMoreError(null);
-
-    try {
-      const page = await libraryController.getPlaylistTrackPage(playlist, nextPageKey);
-      if (playlistIdRef.current !== loadingPlaylistId) return;
-      const uniqueNewTracks = getUniqueNewTracks(tracksRef.current, page.tracks);
-      setEnteringTrackKeys(new Set(uniqueNewTracks.map(getTrackKey)));
-      if (uniqueNewTracks.length > 0) {
-        const updatedTracks = [...tracksRef.current, ...uniqueNewTracks];
-        tracksRef.current = updatedTracks;
-        setTracks(updatedTracks);
-      }
-      setHasMoreTracks(page.hasMore);
-      setNextPageKey(page.nextPageKey);
-    } catch {
-      if (playlistIdRef.current === loadingPlaylistId) {
-        setLoadMoreError("Could not load more songs.");
-      }
-    } finally {
-      if (playlistIdRef.current === loadingPlaylistId) {
-        isLoadingMoreRef.current = false;
-        setIsLoadingMore(false);
-      }
-    }
-  }, [hasMoreTracks, isLoading, libraryController, nextPageKey, playlist]);
-
-  useEffect(() => {
-    if (!hasMoreTracks) return;
-    const sentinel = loadMoreRef.current;
-    if (!sentinel) return;
-    const scrollRoot = sentinel.closest("[data-page-scroll-root]");
-
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        void loadMoreTracks();
-      }
-    }, {
-      root: scrollRoot instanceof Element ? scrollRoot : null,
-      rootMargin: "700px 0px",
-    });
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMoreTracks, loadMoreTracks, tracks.length]);
 
   useEffect(() => {
     if (!playlist || isLoading || error || tracks.length === 0) return;
@@ -391,32 +314,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     setSortDirection(nextSort === "dateAdded" ? "desc" : "asc");
   };
 
-  const loadEntirePlaylistForDownload = async (): Promise<Track[]> => {
-    if (!playlist) return tracks;
-    let collected = tracks;
-    let pageKey = nextPageKey;
-    let more = hasMoreTracks;
-    const seen = new Set(collected.map((track) => track.id));
-
-    for (let page = 0; more && pageKey && page < 100; page += 1) {
-      const result = await libraryController.getPlaylistTrackPage(playlist, pageKey);
-      const fresh = result.tracks.filter((track) => {
-        if (seen.has(track.id)) return false;
-        seen.add(track.id);
-        return true;
-      });
-      if (fresh.length === 0 && result.nextPageKey === pageKey) break;
-      if (fresh.length > 0) collected = [...collected, ...fresh];
-      more = result.hasMore;
-      pageKey = result.nextPageKey;
-    }
-
-    setTracks(collected);
-    setHasMoreTracks(more);
-    setNextPageKey(pageKey);
-    return collected;
-  };
-
   const handlePlaylistSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Backspace" || playlistSearchQuery) return;
     event.preventDefault();
@@ -462,7 +359,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             playlist={playlist}
             tracks={tracks}
             disabled={isLoading || Boolean(error) || tracks.length === 0}
-            onBeforeStart={loadEntirePlaylistForDownload}
           />
           <button
             className={styles.shuffleButton}
@@ -477,10 +373,10 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       </header>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
       {error && <p className={styles.message}>{error}</p>}
-      {!isLoading && !error && !hasMoreTracks && tracks.length === 0 && (
+      {!isLoading && !error && tracks.length === 0 && (
         <p className={styles.message}>This playlist is empty.</p>
       )}
-      {!isLoading && !error && (tracks.length > 0 || hasMoreTracks) && (
+      {!isLoading && !error && tracks.length > 0 && (
         <>
           <div
             className={styles.sortOptions}
@@ -633,17 +529,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             })}
           </div>
           )}
-          <div ref={loadMoreRef} className={styles.loadMoreStatus} aria-live="polite">
-            {isLoadingMore ? (
-              <PlaylistLoadingSpinner label="Loading more songs" />
-            ) : hasMoreTracks ? (
-              <button type="button" onClick={() => void loadMoreTracks()}>
-                {loadMoreError ? "Retry loading songs" : "Load more songs"}
-              </button>
-            ) : (
-              ""
-            )}
-          </div>
         </>
       )}
     </div>
