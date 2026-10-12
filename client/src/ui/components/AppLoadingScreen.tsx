@@ -1,4 +1,3 @@
-import appIcon from "../../../assets/img/opendeck-logo.png";
 import styles from "./AppLoadingScreen.module.css";
 
 const LOADING_LINES = [
@@ -26,7 +25,6 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
     >
       <div className={styles.ambient} />
       <div className={styles.content}>
-        <img className={styles.mark} src={appIcon} alt="" />
         <div className={styles.wordmark}>
           <strong>OpenDeck</strong>
         </div>

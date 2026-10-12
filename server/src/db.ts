@@ -261,6 +261,18 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX totp_login_challenges_expires_idx ON totp_login_challenges(expires_at);
   `,
+  // v9 — successful bearer-key API requests, grouped for lightweight stats.
+  `
+  CREATE TABLE api_key_usage (
+    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    route TEXT NOT NULL,
+    day INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER NOT NULL,
+    PRIMARY KEY (api_key_id, route, day)
+  );
+  CREATE INDEX api_key_usage_route_idx ON api_key_usage(route, day);
+  `,
 ];
 
 function migrate(db: Db): void {

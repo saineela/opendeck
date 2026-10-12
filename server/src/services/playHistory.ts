@@ -226,13 +226,65 @@ export function clearPlays(db: Db, userId: string): number {
   return Number(result.changes);
 }
 
-/** Per-API-key usage counters for the Settings → API key list. */
-export function getKeyPlayStats(
-  db: Db,
-  userId: string,
-): Map<string, { totalPlays: number; playsLast7Days: number; lastPlayedAt: number | null }> {
+/** Per-key request and playback statistics for Settings → API keys. */
+export interface ApiKeyUsageStats {
+  totalRequests: number;
+  requestsLast7Days: number;
+  lastRequestAt: number | null;
+  requestsByRoute: Array<{ route: string; requests: number }>;
+  totalPlays: number;
+  playsLast7Days: number;
+  lastPlayedAt: number | null;
+}
+
+export function getKeyPlayStats(db: Db, userId: string): Map<string, ApiKeyUsageStats> {
   const now = Date.now();
-  const rows = db
+  const requestRows = db
+    .prepare(
+      `SELECT u.api_key_id AS key_id,
+              SUM(u.request_count) AS total_requests,
+              SUM(CASE WHEN u.day >= ? AND u.day <= ? THEN u.request_count ELSE 0 END) AS requests_7d,
+              MAX(u.last_used_at) AS last_request_at
+       FROM api_keys k JOIN api_key_usage u ON u.api_key_id = k.id
+       WHERE k.user_id = ?
+       GROUP BY u.api_key_id`,
+    )
+    .all(
+      Math.floor((now - 7 * 24 * 60 * 60 * 1000) / 86_400_000),
+      Math.floor(now / 86_400_000),
+      userId,
+    ) as Array<{
+    key_id: string;
+    total_requests: number;
+    requests_7d: number;
+    last_request_at: number;
+  }>;
+  const routeRows = db
+    .prepare(
+      `SELECT u.api_key_id AS key_id, u.route, SUM(u.request_count) AS request_count
+       FROM api_keys k JOIN api_key_usage u ON u.api_key_id = k.id
+       WHERE k.user_id = ?
+       GROUP BY u.api_key_id, u.route
+       ORDER BY u.api_key_id, request_count DESC, u.route`,
+    )
+    .all(userId) as Array<{ key_id: string; route: string; request_count: number }>;
+  const usage = new Map<string, ApiKeyUsageStats>();
+  for (const row of requestRows) {
+    usage.set(row.key_id, {
+      totalRequests: row.total_requests,
+      requestsLast7Days: row.requests_7d,
+      lastRequestAt: row.last_request_at,
+      requestsByRoute: [],
+      totalPlays: 0,
+      playsLast7Days: 0,
+      lastPlayedAt: null,
+    });
+  }
+  for (const row of routeRows) {
+    usage.get(row.key_id)?.requestsByRoute.push({ route: row.route, requests: row.request_count });
+  }
+
+  const playRows = db
     .prepare(
       `SELECT k.id AS key_id,
               COUNT(p.id) AS total_plays,
@@ -248,14 +300,20 @@ export function getKeyPlayStats(
     plays_7d: number;
     last_played_at: number | null;
   }>;
-  return new Map(
-    rows.map((row) => [
-      row.key_id,
-      {
-        totalPlays: row.total_plays,
-        playsLast7Days: row.plays_7d,
-        lastPlayedAt: row.last_played_at,
-      },
-    ]),
-  );
+  for (const row of playRows) {
+    const stats = usage.get(row.key_id) ?? {
+      totalRequests: 0,
+      requestsLast7Days: 0,
+      lastRequestAt: null,
+      requestsByRoute: [],
+      totalPlays: 0,
+      playsLast7Days: 0,
+      lastPlayedAt: null,
+    };
+    stats.totalPlays = row.total_plays;
+    stats.playsLast7Days = row.plays_7d;
+    stats.lastPlayedAt = row.last_played_at;
+    usage.set(row.key_id, stats);
+  }
+  return usage;
 }

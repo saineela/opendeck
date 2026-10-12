@@ -225,6 +225,8 @@ export class LibraryController {
     try {
       const restored = await this.dataSource.restoreSession?.();
       if (restored) {
+        this.hasYouTubeLibrary = true;
+        if (this.state.library) this.setState({ status: "ready", authPrompt: null, error: null });
         await this.refresh();
         return;
       }
@@ -250,6 +252,11 @@ export class LibraryController {
       if (!restored) {
         this.setState({ status: "signed-out", authPrompt: null, error: null });
         return;
+      }
+      this.hasYouTubeLibrary = true;
+      // Keep the durable cached library visible while fetching a fresh snapshot.
+      if (cachedLibrary) {
+        this.setState({ status: "ready", authPrompt: null, error: null });
       }
       await this.refresh();
     } catch (error) {

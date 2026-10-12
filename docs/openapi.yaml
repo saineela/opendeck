@@ -2827,9 +2827,22 @@ components:
 
     ApiKeyPlayStats:
       type: object
-      description: Per-key play counters, attributed from `/api/media/stream` requests made with this key
-      required: [totalPlays, playsLast7Days, lastPlayedAt]
+      description: Successful API requests made with this key by endpoint, with play counts reported separately
+      required: [totalRequests, requestsLast7Days, lastRequestAt, requestsByRoute, totalPlays, playsLast7Days, lastPlayedAt]
       properties:
+        totalRequests: { type: integer, description: All-time successful requests made with this key }
+        requestsLast7Days: { type: integer }
+        lastRequestAt:
+          type: [integer, "null"]
+          description: Epoch ms of the most recent successful request; null if unused
+        requestsByRoute:
+          type: array
+          items:
+            type: object
+            required: [route, requests]
+            properties:
+              route: { type: string, description: Matched route template }
+              requests: { type: integer, description: All-time successful requests to this route }
         totalPlays: { type: integer, description: All-time plays made with this key }
         playsLast7Days: { type: integer }
         lastPlayedAt:

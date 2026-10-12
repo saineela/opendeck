@@ -63,16 +63,6 @@
   transform: translateY(-8px);
 }
 
-.mark {
-  width: 72px;
-  height: 72px;
-  margin-bottom: 22px;
-  object-fit: contain;
-  animation:
-    iconScale 1.8s ease-in-out infinite alternate,
-    iconGlow 1.8s ease-in-out infinite alternate;
-}
-
 .wordmark {
   display: flex;
   gap: 7px;
@@ -130,30 +120,6 @@
   }
 }
 
-@keyframes iconScale {
-  from {
-    transform: scale(0.96);
-  }
-
-  to {
-    transform: scale(1.04);
-  }
-}
-
-@keyframes iconGlow {
-  from {
-    filter:
-      drop-shadow(0 0 8px color-mix(in srgb, var(--color-accent) 28%, transparent))
-      drop-shadow(0 0 18px color-mix(in srgb, var(--color-accent) 16%, transparent));
-  }
-
-  to {
-    filter:
-      drop-shadow(0 0 14px color-mix(in srgb, var(--color-accent) 52%, transparent))
-      drop-shadow(0 0 30px color-mix(in srgb, var(--color-accent) 30%, transparent));
-  }
-}
-
 @keyframes drift {
   from {
     transform: translate3d(-5%, 3%, 0) scale(0.92);
@@ -178,17 +144,12 @@
   .screen,
   .screen::before,
   .ambient,
-  .mark,
   .progress span {
     animation: none;
   }
 
   .screen {
     transition-duration: 60ms;
-  }
-
-  .mark {
-    filter: drop-shadow(0 0 12px color-mix(in srgb, var(--color-accent) 36%, transparent));
   }
 
   .progress span {

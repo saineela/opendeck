@@ -614,7 +614,7 @@ describe("server integration", () => {
         body: JSON.stringify({ label: "Stereo" }),
       });
       expect(keyRes.status).toBe(201);
-      const key = (await keyRes.json()) as { id: string };
+      const key = (await keyRes.json()) as { id: string; key: string };
 
       // The stream endpoint records: app plays, API-key plays, and dedupes
       // repeated ranged requests of the same track.
@@ -690,13 +690,47 @@ describe("server integration", () => {
         await fetch(`${running.base}/api/keys`, { headers: { cookie } })
       ).json()) as {
         keys: Array<{
+          id: string;
           label: string;
-          stats: { totalPlays: number; playsLast7Days: number; lastPlayedAt: number | null };
+          stats: {
+            totalRequests: number;
+            requestsLast7Days: number;
+            lastRequestAt: number | null;
+            requestsByRoute: Array<{ route: string; requests: number }>;
+            totalPlays: number;
+            playsLast7Days: number;
+            lastPlayedAt: number | null;
+          };
         }>;
       };
       const stereo = keys.keys.find((entry) => entry.label === "Stereo");
       expect(stereo?.stats).toMatchObject({ totalPlays: 1, playsLast7Days: 1 });
       expect(stereo?.stats.lastPlayedAt).toBeTruthy();
+
+      // Successful bearer calls are counted per endpoint; cookie requests
+      // above are not included in these API-key request stats.
+      for (let i = 0; i < 2; i += 1) {
+        const bearerKey = await fetch(`${running.base}/api/recommendations`, {
+          headers: { authorization: `Bearer ${key.key}` },
+        });
+        expect(bearerKey.status).toBe(200);
+      }
+      const afterRequest = (await (
+        await fetch(`${running.base}/api/keys`, { headers: { cookie } })
+      ).json()) as {
+        keys: Array<{
+          id: string;
+          stats: {
+            totalRequests: number;
+            requestsLast7Days: number;
+            requestsByRoute: Array<{ route: string; requests: number }>;
+          };
+        }>;
+      };
+      const counted = afterRequest.keys.find((entry) => entry.id === stereo?.id);
+      expect(counted?.stats.totalRequests).toBe(2);
+      expect(counted?.stats.requestsLast7Days).toBe(2);
+      expect(counted?.stats.requestsByRoute).toContainEqual({ route: "/api/recommendations/", requests: 2 });
 
       // History is per user: another account sees an empty list.
       seedUser(db, "hist-other", "Other User");

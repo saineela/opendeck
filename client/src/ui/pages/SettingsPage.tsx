@@ -283,6 +283,8 @@ export function SettingsPage({
   const [apiKeyCopied, setApiKeyCopied] = useState(false);
   const [apiKeyBusy, setApiKeyBusy] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [selectedApiKeyId, setSelectedApiKeyId] = useState<string | null>(null);
+  const [apiKeyStatsRefreshing, setApiKeyStatsRefreshing] = useState(false);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminOAuth, setAdminOAuth] = useState<OAuthProviderConfig | null>(null);
@@ -610,7 +612,15 @@ export function SettingsPage({
           keyPrefix: created.keyPrefix,
           createdAt: created.createdAt,
           lastUsedAt: null,
-          stats: { totalPlays: 0, playsLast7Days: 0, lastPlayedAt: null },
+          stats: {
+            totalRequests: 0,
+            requestsLast7Days: 0,
+            lastRequestAt: null,
+            requestsByRoute: [],
+            totalPlays: 0,
+            playsLast7Days: 0,
+            lastPlayedAt: null,
+          },
         },
         ...current.filter((key) => key.id !== created.id),
       ]);
@@ -644,6 +654,29 @@ export function SettingsPage({
       setApiKeyError("Unable to copy — select the key and copy it manually.");
     }
   };
+
+  const refreshApiKeyStats = async () => {
+    setApiKeyStatsRefreshing(true);
+    setApiKeyError(null);
+    try {
+      setApiKeys(await listApiKeys());
+    } catch (error) {
+      setApiKeyError(error instanceof Error ? error.message : "Unable to refresh API key stats.");
+    } finally {
+      setApiKeyStatsRefreshing(false);
+    }
+  };
+
+  const handleOpenApiKeyStats = (id: string) => {
+    setSelectedApiKeyId(id);
+    void refreshApiKeyStats();
+  };
+
+  useEffect(() => {
+    if (!selectedApiKeyId) return undefined;
+    const refreshTimer = window.setInterval(() => void refreshApiKeyStats(), 5_000);
+    return () => window.clearInterval(refreshTimer);
+  }, [selectedApiKeyId]);
 
   /* ------------------------------------------------------------------
    * Admin panel actions.
@@ -1845,12 +1878,20 @@ export function SettingsPage({
                 {apiKeys.length > 0 ? (
                   <div className={styles.localPlaylistList}>
                     {apiKeys.map((key) => (
-                      <div className={styles.localPlaylistItem} key={key.id}>
+                      <div
+                        className={`${styles.localPlaylistItem} ${styles.apiKeyItem}`}
+                        key={key.id}
+                      >
                         <div className={styles.localPlaylistTitleRow}>
-                          <span className={styles.localPlaylistTitle}>
+                          <button
+                            className={styles.apiKeyDetailsButton}
+                            type="button"
+                            aria-label={`View stats for ${key.label}`}
+                            onClick={() => handleOpenApiKeyStats(key.id)}
+                          >
                             <IconKey size={18} aria-hidden="true" />
-                            {key.label}
-                          </span>
+                            <span>{key.label}</span>
+                          </button>
                           <button
                             className={styles.dangerButton}
                             type="button"
@@ -1869,13 +1910,8 @@ export function SettingsPage({
                               : " · never used"}
                           </span>
                           <span className={styles.keyStats}>
-                            <strong>{key.stats.totalPlays.toLocaleString()}</strong> plays via API
-                            {key.stats.playsLast7Days > 0 && (
-                              <> · <strong>{key.stats.playsLast7Days.toLocaleString()}</strong> in the last 7 days</>
-                            )}
-                            {key.stats.lastPlayedAt && (
-                              <> · last play {new Date(key.stats.lastPlayedAt).toLocaleString()}</>
-                            )}
+                            <strong>{key.stats.totalRequests.toLocaleString()}</strong> API requests
+                            · <strong>{key.stats.totalPlays.toLocaleString()}</strong> plays
                           </span>
                         </span>
                       </div>
@@ -1891,6 +1927,88 @@ export function SettingsPage({
           </section>
         </div>
       )}
+
+      {selectedApiKeyId && (() => {
+        const key = apiKeys.find((item) => item.id === selectedApiKeyId);
+        if (!key) return null;
+        return (
+          <div
+            className={styles.modalOverlay}
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setSelectedApiKeyId(null);
+            }}
+          >
+            <section
+              className={styles.apiKeyStatsModal}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="api-key-stats-title"
+            >
+              <div className={styles.compactHeader}>
+                <div className={styles.apiKeyStatsHeading}>
+                  <div>
+                    <h2 id="api-key-stats-title">{key.label} API stats</h2>
+                    <p>{key.keyPrefix}… · successful requests made with this key</p>
+                  </div>
+                  <div className={styles.apiKeyStatsActions}>
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      disabled={apiKeyStatsRefreshing}
+                      onClick={() => void refreshApiKeyStats()}
+                    >
+                      {apiKeyStatsRefreshing ? "Refreshing…" : "Refresh stats"}
+                    </button>
+                    <button
+                      className={styles.secondaryButton}
+                      type="button"
+                      onClick={() => setSelectedApiKeyId(null)}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className={styles.apiKeyStatsGrid}>
+                <div className={styles.apiKeyStatCard}>
+                  <strong>{key.stats.totalRequests.toLocaleString()}</strong>
+                  <span>Total API requests</span>
+                </div>
+                <div className={styles.apiKeyStatCard}>
+                  <strong>{key.stats.requestsLast7Days.toLocaleString()}</strong>
+                  <span>Requests in 7 days</span>
+                </div>
+                <div className={styles.apiKeyStatCard}>
+                  <strong>{key.stats.totalPlays.toLocaleString()}</strong>
+                  <span>Plays through API</span>
+                </div>
+              </div>
+              {apiKeyError && <p className={styles.error} role="alert">{apiKeyError}</p>}
+              <p className={styles.apiKeyLastUsed}>
+                Last API request: {key.stats.lastRequestAt
+                  ? new Date(key.stats.lastRequestAt).toLocaleString()
+                  : "Never"}
+              </p>
+              <section className={styles.apiKeyRoutes} aria-labelledby="api-key-routes-title">
+                <h3 id="api-key-routes-title">Requests by endpoint</h3>
+                {key.stats.requestsByRoute.length > 0 ? (
+                  <ul>
+                    {key.stats.requestsByRoute.map((route) => (
+                      <li key={route.route}>
+                        <code>{route.route}</code>
+                        <strong>{route.requests.toLocaleString()}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No successful API requests recorded yet.</p>
+                )}
+              </section>
+            </section>
+          </div>
+        );
+      })()}
 
       {activeTab === "admin" && isAdmin && (
         <div className={styles.tabPanel} role="tabpanel" aria-label="Admin settings">

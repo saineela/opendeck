@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { Db } from "../db.js";
 import type { ServerConfig } from "../config.js";
+import { logger } from "../logger.js";
 
 export const SESSION_COOKIE = "od_sid";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -161,7 +162,7 @@ function bearerApiKey(req: Request): string | null {
 }
 
 export function sessionMiddleware(db: Db): RequestHandler {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  return (req: Request, res: Response, next: NextFunction) => {
     const sessionId = getSessionId(req);
     const user = sessionId ? loadSession(db, sessionId) : null;
     if (user) {
@@ -177,6 +178,30 @@ export function sessionMiddleware(db: Db): RequestHandler {
     req.sessionUserId = keyAuth?.user.id ?? null;
     req.authVia = keyAuth ? "api-key" : null;
     req.apiKeyId = keyAuth?.keyId ?? null;
+    if (keyAuth) {
+      res.once("finish", () => {
+        try {
+          if (res.statusCode >= 200 && res.statusCode < 400) {
+            const route = `${req.baseUrl}${req.route?.path ?? req.path}`.slice(0, 255);
+            const now = Date.now();
+            const day = Math.floor(now / 86_400_000);
+            db.prepare(
+              `INSERT INTO api_key_usage (api_key_id, route, day, request_count, last_used_at)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(api_key_id, route, day) DO UPDATE SET
+                 request_count = request_count + 1,
+                 last_used_at = excluded.last_used_at`,
+            ).run(keyAuth.keyId, route, day, now);
+          }
+        } catch (error) {
+          // Usage tracking is best-effort and must not disrupt a completed response.
+          logger.warn("apiKeyUsage.record failed", {
+            keyId: keyAuth.keyId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
     next();
   };
 }

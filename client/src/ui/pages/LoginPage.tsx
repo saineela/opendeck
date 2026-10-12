@@ -233,14 +233,11 @@ export function LoginPage({ onSignedIn, onCancel }: LoginPageProps) {
     <div className={styles.page}>
       <aside className={styles.brand}>
         <div className={styles.brandTop}>
-          <span className={styles.logoMark} aria-hidden="true">
-            <img className={styles.logoImage} src="/img/opendeck-logo.png" alt="" />
-          </span>
           <span className={styles.wordmark}>OpenDeck</span>
         </div>
 
         <div className={styles.brandCopy}>
-          <h2>Your music, on your server.</h2>
+          <h2>Your library, wherever you listen.</h2>
           <ul className={styles.points}>
             <li>Every account gets its own library, playlists, and likes.</li>
             <li>Two-step verification with TOTP and backup codes.</li>

@@ -26,8 +26,8 @@ const TV_CLIENT_NAME = "7";
 const TV_CLIENT_VERSION = "7.20250422.18.00";
 const TV_BROWSE = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false";
 const REQUEST_TIMEOUT_MS = 25_000;
-/** Cap continuation pages per surface so one account cannot stall a request. */
-const MAX_PAGES = 8;
+/** Bound continuation reads while comfortably covering large personal libraries. */
+const MAX_PAGES = 100;
 
 export interface YouTubeLibraryTrack {
   id: string;
@@ -175,16 +175,27 @@ async function tvBrowse(
   }
 }
 
-/** Follows `continuationCommand` tokens until the surface is exhausted. */
-async function tvBrowseAll(token: string, browseId: string): Promise<Json[]> {
+type BrowseArgs = { browseId?: string; continuation?: string };
+type BrowsePage = Json | null;
+type Browse = (token: string, args: BrowseArgs) => Promise<BrowsePage>;
+
+/** Follows continuation tokens until the surface is exhausted. */
+async function tvBrowseAll(
+  token: string,
+  browseId: string,
+  browse: Browse = tvBrowse,
+  maxPages = MAX_PAGES,
+): Promise<Json[]> {
   const pages: Json[] = [];
-  const first = await tvBrowse(token, { browseId });
+  const first = await browse(token, { browseId });
   if (!first) return pages;
   pages.push(first);
 
   let continuation = readContinuation(first);
-  while (continuation && pages.length < MAX_PAGES) {
-    const next = await tvBrowse(token, { continuation });
+  const seenContinuations = new Set<string>();
+  while (continuation && pages.length < maxPages && !seenContinuations.has(continuation)) {
+    seenContinuations.add(continuation);
+    const next = await browse(token, { continuation });
     if (!next) break;
     pages.push(next);
     continuation = readContinuation(next);
@@ -193,13 +204,12 @@ async function tvBrowseAll(token: string, browseId: string): Promise<Json[]> {
 }
 
 function readContinuation(page: Json): string | null {
-  const commands = collect(page, "continuationCommand");
-  for (const command of commands) {
-    if (isObject(command) && typeof command.token === "string") return command.token;
-  }
-  const reloaded = collect(page, "reloadContinuationData");
-  for (const command of reloaded) {
-    if (isObject(command) && typeof command.continuation === "string") return command.continuation;
+  for (const key of ["continuationCommand", "nextContinuationData", "reloadContinuationData"]) {
+    for (const command of collect(page, key)) {
+      if (!isObject(command)) continue;
+      const token = command.token ?? command.continuation;
+      if (typeof token === "string" && token.length > 0) return token;
+    }
   }
   return null;
 }
@@ -386,3 +396,5 @@ export async function getYouTubeLibrary(
     recentlyPlayed,
   };
 }
+
+export const __testing = { readContinuation, tvBrowseAll };

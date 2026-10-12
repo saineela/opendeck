@@ -13,8 +13,12 @@ export interface ApiKeyInfo {
   keyPrefix: string;
   createdAt: number;
   lastUsedAt: number | null;
-  /** Plays made through the HTTP API with this key (see /api/history). */
+  /** Successful requests made through the HTTP API with this key. */
   stats: {
+    totalRequests: number;
+    requestsLast7Days: number;
+    lastRequestAt: number | null;
+    requestsByRoute: Array<{ route: string; requests: number }>;
     totalPlays: number;
     playsLast7Days: number;
     lastPlayedAt: number | null;

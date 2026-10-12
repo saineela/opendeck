@@ -1081,14 +1081,14 @@ setup/enable/disable routes (cookie only).
 
 | Route | Body | Response |
 |---|---|---|
-| `GET /api/keys` | — | `{"keys":[{"id","label","keyPrefix","createdAt","lastUsedAt","stats":{"totalPlays","playsLast7Days","lastPlayedAt"}}]}` — newest first, never a usable key; `stats` counts plays made [through the API](#213-play-history--apihistory) with that key (`lastPlayedAt` null until it plays once) |
+| `GET /api/keys` | — | `{"keys":[{"id","label","keyPrefix","createdAt","lastUsedAt","stats":{"totalRequests","requestsLast7Days","lastRequestAt","requestsByRoute","totalPlays","playsLast7Days","lastPlayedAt"}}]}` — newest first, never a usable key; `stats` counts successful requests made with that key by endpoint and separately counts plays streamed [through the API](#213-play-history--apihistory) |
 | `POST /api/keys` | `{ "label": "laptop" }` | **201** `{id, label, key, keyPrefix, createdAt}` — `key` is the plaintext and is returned **exactly once** |
 | `DELETE /api/keys/:id` | — | `{"ok":true}`; bearer auth stops working immediately |
 
 Rules: `label` is trimmed and must be 1–80 chars (400 otherwise);
 `keyPrefix` is the first 12 characters of the key (safe to display);
 `lastUsedAt` is epoch ms of the last bearer use, or `null` until first used.
-Revoking an unknown or another account's key → **404**.
+Revoking an unknown or another account's key → **404**. The API key details panel in Settings shows total successful requests, the trailing seven-day request count, last request time, and counts per endpoint. It retains per-key playback counts separately; denied requests and browser-session requests do not count.
 
 ---
 

@@ -46,6 +46,7 @@ import {
   setAppSetting,
 } from "../internal/appSettings";
 import { refreshAuthSession, getAuthSnapshot, useAuth } from "../auth/authClient";
+import { restoreLibraryAfterAccountSignIn } from "./pages/loginSessionRestore";
 import {
   pushSupported,
   registerServiceWorker,
@@ -714,7 +715,10 @@ export default function App() {
   };
 
   const handleAuthSuccess = () => {
-    void libraryController.loadAppLibrary();
+    // The controller's one-time boot check may have run before the user
+    // authenticated (or after the previous session expired). Re-check the
+    // server-side YouTube link now instead of requiring a second button click.
+    void restoreLibraryAfterAccountSignIn(libraryController, getAuthSnapshot().youtubeLinked);
   };
 
   const handleSearch = (query: string, openInNewTab: boolean) => {

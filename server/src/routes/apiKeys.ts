@@ -33,8 +33,7 @@ export function createApiKeysRoutes(db: Db): Router {
          FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`,
       )
       .all(req.sessionUserId!) as unknown as KeyRow[];
-    // Separate play statistics per key: which key played what, how often,
-    // and when it last did (plays made through the HTTP API only).
+    // Report successful API request and playback stats for each account key.
     const stats = getKeyPlayStats(db, req.sessionUserId!);
     res.json({
       keys: rows.map((row) => ({
@@ -44,6 +43,10 @@ export function createApiKeysRoutes(db: Db): Router {
         createdAt: row.created_at,
         lastUsedAt: row.last_used_at,
         stats: stats.get(row.id) ?? {
+          totalRequests: 0,
+          requestsLast7Days: 0,
+          lastRequestAt: null,
+          requestsByRoute: [],
           totalPlays: 0,
           playsLast7Days: 0,
           lastPlayedAt: null,

@@ -2295,8 +2295,10 @@ export class YouTubeMusicDataSource extends DataSource {
         this.signedIn = false;
         return false;
       }
+      // The linked OAuth session is authoritative for library access. Do not
+      // block restoring it on the InnerTube client/player bootstrap: the
+      // library is fetched server-side, while playback can initialize lazily.
       this.signedIn = true;
-      await this.getMusicClient();
       logInternalInfo("YouTubeMusicDataSource.restoreSession success");
       return true;
     } catch (error) {

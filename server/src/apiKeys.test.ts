@@ -136,11 +136,34 @@ describe("GET /api/keys", () => {
     const res = await call("GET", "/api/keys", { cookie: harness.cookieA });
     expect(res.status).toBe(200);
     const payload = (await res.json()) as {
-      keys: Array<{ id: string; label: string; keyPrefix: string; createdAt: number }>;
+      keys: Array<{
+        id: string;
+        label: string;
+        keyPrefix: string;
+        createdAt: number;
+        stats: {
+          totalRequests: number;
+          requestsLast7Days: number;
+          lastRequestAt: number | null;
+          requestsByRoute: Array<{ route: string; requests: number }>;
+          totalPlays: number;
+          playsLast7Days: number;
+          lastPlayedAt: number | null;
+        };
+      }>;
     };
     expect(payload.keys).toHaveLength(1);
     expect(payload.keys[0].label).toBe("laptop");
     expect(payload.keys[0].keyPrefix).toBe(created.slice(0, 12));
+    expect(payload.keys[0].stats).toEqual({
+      totalRequests: 0,
+      requestsLast7Days: 0,
+      lastRequestAt: null,
+      requestsByRoute: [],
+      totalPlays: 0,
+      playsLast7Days: 0,
+      lastPlayedAt: null,
+    });
     expect(JSON.stringify(payload)).not.toContain(created);
   });
 
