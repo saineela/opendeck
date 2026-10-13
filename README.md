@@ -87,12 +87,6 @@ Server configuration lives in environment variables (see `.env.example` and `ser
 
 ## Roadmap 📌
 
-- Crossfade and a Web Audio equalizer (borrowed from how good modern clients do it)
-- Last.fm scrobbling
-- Multi-source lyrics with scored matching (LRCLIB, Genius) instead of a single provider
-- SponsorBlock integration
-- Playlist import/export (Spotify/YouTube Music links)
-- Mobile PWA installability and offline shell
 - ~~Admin instance theme~~
 - ~~Server-side artwork cache shared across users~~
 - ~~HTTP API with per-account keys and full docs~~
