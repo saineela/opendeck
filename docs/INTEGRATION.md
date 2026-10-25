@@ -340,21 +340,28 @@ attestation in the browser (see `client/src/datasource/youtube/poToken.ts`).
 
 ```
 search result (videoId)
-   │  yt.getBasicInfo(videoId, { po_token })   ── proxy ──▶ InnerTube /player
-   │  pick audio format by quality (normal/high; mp4 preference)
-   │  decipher signature with session player   ── proxy ──▶ ytimg player script
-   ▼
-googlevideo https://…/videoplayback?...&pot=…
-   │  buildMediaStreamUrl(url)  →  /api/media/stream?url=…
-   ▼
-<audio src="/api/media/stream?…">      (Range → seek, CORS-free, rate 300/min)
+browser: mint BotGuard token (poToken.ts)      → POST /api/media/resolve { videoId, poToken }
+server : credential ladder                     → WEB_REMIX (cookies) → WEB → TVHTML5 (OAuth) → ANDROID_VR → IOS
+browser: buildMediaStreamUrl(url)              →  GET /api/media/stream?url=…
+<audio src="/api/media/stream?…">              (Range → seek, CORS-free, rate 300/min)
 ```
 
-Client order falls through per track: authenticated streaming setting
-decides `music → web → anonymous` vs `anonymous → web → music`; downloads
-try `download` first. Every client is attested (`po_token`); a client that
-fails is logged and the next is tried; total failure surfaces
-"Unable to resolve a playable YouTube audio stream."
+Resolution is server-first because a browser cannot read youtube.com cookies and
+this origin cannot mint the attestation a headless server cannot either. The
+ladder in `server/src/services/youtubePlayback.ts` tries the imported YouTube
+session (SAPISIDHASH), then the linked OAuth account on TVHTML5, then the
+anonymous `ANDROID_VR`/`IOS` clients that still serve public tracks. A failure
+returns the per-client attempts so the UI can name the missing credential; the
+browser-side `youtubei.js` ladder remains the fallback when the server cannot
+resolve.
+
+Gated label tracks need a **verified YouTube session** (Settings → Playback
+sign-in). Import the full `Cookie:` request header from a signed-in
+music.youtube.com DevTools request — `document.cookie` cannot see the httpOnly
+`HSID`/`SSID` cookies, so a partial header is rejected at import.
+
+See `docs/PLAYBACK_INVESTIGATION.md` for the measured JAMC comparison and the
+full iteration log.
 
 Integration points:
 

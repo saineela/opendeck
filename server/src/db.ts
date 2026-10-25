@@ -273,6 +273,21 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX api_key_usage_route_idx ON api_key_usage(route, day);
   `,
+  // v10 — encrypted YouTube session cookies, per user.
+  //
+  // OAuth (the TV device-code flow) is only accepted by TVHTML5; the web and
+  // mobile playback clients require the user's real YouTube session cookies
+  // instead. They are stored encrypted with APP_SECRET and never returned to
+  // the browser — only injected server-side into youtube.com requests.
+  `
+  CREATE TABLE youtube_cookies (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    ciphertext TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    auth_tag TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 function migrate(db: Db): void {

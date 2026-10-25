@@ -320,6 +320,9 @@ export async function disableTotp(input: { password: string; code: string }): Pr
 export interface YouTubeLinkStatus {
   state: "idle" | "pending" | "linked" | "error";
   linked: boolean;
+  /** True when a YouTube session-cookie header is stored for playback. */
+  cookiesLinked?: boolean;
+  cookiesUpdatedAt?: number | null;
   verificationUrl?: string;
   userCode?: string;
   expiresInSec?: number;
@@ -349,11 +352,53 @@ export async function getYouTubeLinkStatus(): Promise<YouTubeLinkStatus> {
     credentials: "same-origin",
   });
   if (!response.ok) {
-    if (response.status === 401) return { state: "idle", linked: false };
+    if (response.status === 401) {
+      return { state: "idle", linked: false, cookiesLinked: false, cookiesUpdatedAt: null };
+    }
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(payload?.error ?? `YouTube sign-in status failed with HTTP ${response.status}.`);
   }
   return (await response.json()) as YouTubeLinkStatus;
+}
+
+/**
+ * Stores the user's YouTube session cookie header for playback. The value is
+ * encrypted server-side and is never returned by any endpoint.
+ */
+export async function saveYouTubeCookies(cookie: string): Promise<{
+  linked: boolean;
+  updatedAt: number | null;
+  accountName?: string | null;
+}> {
+  const response = await fetch("/api/youtube/cookies", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ cookie }),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | { error?: string; linked?: boolean; updatedAt?: number | null; accountName?: string | null }
+    | null;
+  if (!response.ok) {
+    throw new Error(payload?.error ?? `Saving YouTube cookies failed with HTTP ${response.status}.`);
+  }
+  return {
+    linked: Boolean(payload?.linked),
+    updatedAt: payload?.updatedAt ?? null,
+    accountName: payload?.accountName ?? null,
+  };
+}
+
+export async function clearYouTubeCookies(): Promise<void> {
+  const response = await fetch("/api/youtube/cookies", {
+    method: "DELETE",
+    headers: { accept: "application/json" },
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(payload?.error ?? `Removing YouTube cookies failed with HTTP ${response.status}.`);
+  }
 }
 
 export function startYouTubeLink(options: { reauthorize?: boolean } = {}): Promise<YouTubeLinkStatus> {

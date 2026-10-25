@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 import type { Db } from "../db.js";
 import type { ServerConfig } from "../config.js";
-import { requireAuth } from "../middleware/session.js";
+import { requireAuth, requireSession } from "../middleware/session.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import {
   pollDeviceToken,
@@ -14,6 +14,13 @@ import {
   unlinkYouTubeAccount,
 } from "../services/youtubeAccount.js";
 import { getYouTubeLibrary } from "../services/youtubeLibrary.js";
+import {
+  clearYouTubeCookies,
+  getYouTubeCookieStatus,
+  normalizeCookieHeader,
+  saveYouTubeCookies,
+  verifyYouTubeSession,
+} from "../services/youtubeCookies.js";
 import { logger } from "../logger.js";
 
 /**
@@ -40,6 +47,9 @@ interface PendingLink {
 export interface YoutubeStatusResponse {
   state: LinkState;
   linked: boolean;
+  /** True when a YouTube session-cookie header is stored for playback. */
+  cookiesLinked: boolean;
+  cookiesUpdatedAt: number | null;
   verificationUrl?: string;
   userCode?: string;
   expiresInSec?: number;
@@ -108,13 +118,16 @@ function schedulePoll(
 
 function buildStatus(db: Db, userId: string): YoutubeStatusResponse {
   const linked = hasValidYouTubeLink(db, userId);
+  const cookies = getYouTubeCookieStatus(db, userId);
+  const base = { cookiesLinked: cookies.linked, cookiesUpdatedAt: cookies.updatedAt } as const;
   const pending = pendingLinks.get(userId);
 
   if (pending?.completedAt) {
-    return { state: "linked", linked };
+    return { ...base, state: "linked", linked };
   }
   if (pending && pending.state === "error") {
     return {
+      ...base,
       state: "error",
       linked,
       error: pending.error,
@@ -122,6 +135,7 @@ function buildStatus(db: Db, userId: string): YoutubeStatusResponse {
   }
   if (pending && pending.state === "pending" && pending.expiresAt > Date.now()) {
     return {
+      ...base,
       state: "pending",
       linked,
       verificationUrl: pending.verificationUrl,
@@ -130,7 +144,7 @@ function buildStatus(db: Db, userId: string): YoutubeStatusResponse {
     };
   }
   if (pending) clearPending(userId);
-  return { state: linked ? "linked" : "idle", linked };
+  return { ...base, state: linked ? "linked" : "idle", linked };
 }
 
 export function createYoutubeAuthRoutes(db: Db, config: ServerConfig): Router {
@@ -216,7 +230,62 @@ export function createYoutubeAuthRoutes(db: Db, config: ServerConfig): Router {
     const userId = req.sessionUserId!;
     clearPending(userId);
     await unlinkYouTubeAccount(db, config, userId);
-    res.json({ state: "idle" satisfies LinkState, linked: false });
+    clearYouTubeCookies(db, userId);
+    res.json({
+      state: "idle" satisfies LinkState,
+      linked: false,
+      cookiesLinked: false,
+      cookiesUpdatedAt: null,
+    });
+  });
+
+  /**
+   * Stores the user's YouTube session cookie header for authenticated
+   * playback. This is the web-app equivalent of JAMC's embedded YouTube
+   * login: the desktop app can read the webview's cookies, a browser cannot,
+   * so the header is imported once and kept encrypted on the server.
+   *
+   * Session-only on purpose: an API key must not be able to replace the
+   * account's YouTube credentials.
+   */
+  router.post("/cookies", requireSession, startLimit, async (req: Request, res: Response) => {
+    const cookie = typeof req.body?.cookie === "string" ? req.body.cookie : "";
+    const normalized = normalizeCookieHeader(cookie);
+    if (!normalized.ok) {
+      res.status(400).json({ error: normalized.error });
+      return;
+    }
+
+    // A header copied from `document.cookie` is missing YouTube's httpOnly
+    // cookies (HSID, SSID), so SAPISIDHASH signs nothing and YouTube treats
+    // the session as signed-out — playback fails with the same bot wall. Prove
+    // the session before storing it, and say exactly what is wrong if not.
+    const verification = await verifyYouTubeSession(normalized.cookie);
+    if (!verification.authenticated) {
+      res.status(400).json({
+        error:
+          "That cookie header is not a signed-in YouTube session. Copy the full Cookie request header from DevTools (Network → any /youtubei/ request), not document.cookie — the httpOnly cookies (HSID, SSID) are required.",
+      });
+      return;
+    }
+
+    const result = saveYouTubeCookies(db, config, req.sessionUserId!, normalized.cookie);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    logger.info("youtube.cookies saved", {
+      userId: req.sessionUserId,
+      account: verification.accountName ?? null,
+    });
+    res.json({ ...result.status, accountName: verification.accountName });
+  });
+
+  router.delete("/cookies", requireSession, (req: Request, res: Response) => {
+    clearYouTubeCookies(db, req.sessionUserId!);
+    logger.info("youtube.cookies cleared", { userId: req.sessionUserId });
+    res.json({ linked: false, updatedAt: null });
   });
 
   return router;

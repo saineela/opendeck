@@ -173,7 +173,7 @@ export function createApp(config: ServerConfig, db: Db): Express {
   app.use("/api/feed", createFeedRoutes(db, config));
   app.use("/api/keys", createApiKeysRoutes(db));
   app.use("/api/admin", createAdminRoutes(db, config));
-  app.use("/api/media", createMediaRoutes(db));
+  app.use("/api/media", createMediaRoutes(db, config));
   app.use("/api/recommendations", createRecommendationsRoutes(db));
   app.use("/api/push", createPushRoutes(db));
 

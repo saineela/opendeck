@@ -129,6 +129,78 @@
   gap: var(--spacing-xs);
 }
 
+/* YouTube playback session import (the web equivalent of JAMC's login). */
+.cookiePanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-lg);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border);
+}
+
+.cookiePanelHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.cookieStatus {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.cookieStatusLinked {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.cookieActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.cookieInput {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.cookieInput:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.cookieHint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+.cookieHint code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--color-bg-overlay);
+  font-size: inherit;
+}
+
 .accountName {
   overflow: hidden;
   color: var(--color-text-primary);

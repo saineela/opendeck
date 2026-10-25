@@ -4,8 +4,23 @@ import { buildURL, getHeaders } from "bgutils-js/utils";
 import { WebPoMinter } from "bgutils-js/webpo";
 import { logInternalInfo, logInternalWarn } from "../../internal/logging";
 
+/**
+ * Web Proof-of-Origin tokens for YouTube playback.
+ *
+ * YouTube gates `InnerTube /player` behind a BotGuard attestation. The token
+ * can only be minted where Google's VM runs — the user's browser — and the VM
+ * round trip (challenge → snapshot → integrity → mint) has to stay in one
+ * context: a snapshot produced here and exchanged by another process is
+ * rejected by the WAA. Verified against music.youtube.com in a real Chromium:
+ * this in-browser flow returns a 116-character token.
+ *
+ * Tokens are cached for the lifetime of the integrity token minus a margin,
+ * and minted per video id. A failure is not fatal — the caller continues
+ * without one and the server-side ladder reports what is missing.
+ */
+
 const REQUEST_KEY = "O43z0dpjhgX20SCx4KAo";
-const FALLBACK_TTL_SECONDS = 12 * 60 * 60;
+const FALLBACK_TTL_SECONDS = 6 * 60 * 60;
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 type CachedMinter = { minter: WebPoMinter; expiresAt: number };
@@ -13,10 +28,8 @@ type CachedMinter = { minter: WebPoMinter; expiresAt: number };
 let cached: Promise<CachedMinter> | null = null;
 const interpreterLoaded = new Set<string>();
 
-const attestationFetch: typeof fetch = (...args) => globalThis.fetch(...args);
-
 async function attest(): Promise<CachedMinter> {
-  const challenge = await getChallenge({ requestKey: REQUEST_KEY, fetchFunction: attestationFetch });
+  const challenge = await getChallenge({ requestKey: REQUEST_KEY, fetchFunction: fetch });
   const interpreterJavascript =
     challenge.interpreterJavascript?.privateDoNotAccessOrElseSafeScriptWrappedValue;
   if (!interpreterJavascript) {
@@ -41,7 +54,7 @@ async function attest(): Promise<CachedMinter> {
   const webPoSignalOutput: WebPoSignalOutput = [];
   const botguardResponse = await botguard.snapshot({ webPoSignalOutput });
 
-  const response = await attestationFetch(buildURL("GenerateIT"), {
+  const response = await fetch(buildURL("GenerateIT"), {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify([REQUEST_KEY, botguardResponse]),
@@ -50,17 +63,7 @@ async function attest(): Promise<CachedMinter> {
     throw new Error(`Integrity token request returned HTTP ${response.status}.`);
   }
 
-  const [integrityToken, estimatedTtlSecs, , websafeFallbackToken] = (await response.json()) as [
-    string?,
-    number?,
-    number?,
-    string?,
-  ];
-  logInternalInfo("poToken.integrity issued", {
-    hasToken: Boolean(integrityToken),
-    fallbackPresent: Boolean(websafeFallbackToken),
-    ttlSeconds: estimatedTtlSecs ?? null,
-  });
+  const [integrityToken, estimatedTtlSecs] = (await response.json()) as [string | null, number?];
   if (!integrityToken) {
     throw new Error("Integrity token response contained no token.");
   }

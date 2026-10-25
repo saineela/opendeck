@@ -41,7 +41,15 @@ import {
   usesYouTubeScrobbling,
 } from "../../ui/settings/youtubeAccount";
 
-type ClientLabel = "music" | "web" | "anonymous" | "download" | "android" | "ios";
+type ClientLabel = "music" | "web" | "anonymous" | "download" | "android" | "ios" | "tv";
+
+/**
+ * Desktop agent used to fetch YouTube Music's bootstrap document. Without a
+ * browser agent, YouTube serves a ~2 KB "your browser is deprecated" page that
+ * contains neither INNERTUBE_CLIENT_VERSION nor INNERTUBE_API_KEY.
+ */
+const BOOTSTRAP_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 type MusicColumn = {
   title?: {
@@ -306,6 +314,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private downloadClientPromise: Promise<Innertube> | null = null;
   private androidClientPromise: Promise<Innertube> | null = null;
   private iosClientPromise: Promise<Innertube> | null = null;
+  private tvClientPromise: Promise<Innertube> | null = null;
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
   private musicSerializedDelegationContext: string | null = null;
@@ -343,6 +352,9 @@ export class YouTubeMusicDataSource extends DataSource {
    * credentials live server-side and are injected into proxied requests.
    */
   private signedIn = false;
+
+  /** Why the server-side resolver refused the last track, when it did. */
+  private lastServerResolveError: string | null = null;
 
   private setupJavaScriptEvaluator() {
     Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, Types.VMPrimative>) => {
@@ -463,6 +475,42 @@ export class YouTubeMusicDataSource extends DataSource {
     return this.iosClientPromise;
   }
 
+  /**
+   * TVHTML5 is the one InnerTube client YouTube accepts OAuth for. The server
+   * injects the linked account's Bearer token into this client's requests
+   * (see server/src/services/proxy.ts), so a signed-in user gets the same
+   * authenticated session a YouTube TV device has — which is what bypasses
+   * the "Sign in to confirm you're not a bot" gate on gated music tracks.
+   *
+   * It is deliberately created with the Cobalt user agent and a TV platform
+   * context so the request matches a real TV app instead of the default
+   * desktop web context.
+   */
+  private async createTvClient(): Promise<Innertube> {
+    const client = await Innertube.create({
+      fetch: tauriFetch,
+      user_agent: Constants.CLIENTS.TV.USER_AGENT,
+      client_type: ClientType.TV,
+      retrieve_player: true,
+      generate_session_locally: true,
+      enable_session_cache: false,
+    });
+    client.session.context.client.platform = "TV";
+    return client;
+  }
+
+  private getTvClient(): Promise<Innertube> {
+    if (!this.tvClientPromise) {
+      logInternalInfo("YouTubeMusicDataSource.getTvClient creating client");
+      this.tvClientPromise = this.createTvClient().catch((error) => {
+        this.tvClientPromise = null;
+        throw error;
+      });
+    }
+
+    return this.tvClientPromise;
+  }
+
   private getDownloadClient(): Promise<Innertube> {
     if (!this.downloadClientPromise) {
       logInternalInfo("YouTubeMusicDataSource.getDownloadClient creating client");
@@ -491,6 +539,7 @@ export class YouTubeMusicDataSource extends DataSource {
     if (label === "anonymous") return this.getAnonymousClient();
     if (label === "android") return this.getAndroidClient();
     if (label === "ios") return this.getIosClient();
+    if (label === "tv") return this.getTvClient();
     return label === "music" ? this.getMusicClient() : this.getWebClient();
   }
 
@@ -506,9 +555,23 @@ export class YouTubeMusicDataSource extends DataSource {
 
   private async refreshMusicClientMetadata(client: Innertube): Promise<void> {
     try {
+      // The bootstrap page must be fetched with a browser user agent. YouTube
+      // answers a UA-less request (Node's `undici` default, because the proxy
+      // sends no User-Agent unless the caller sets one) with a ~2 KB "Your
+      // browser is deprecated" interstitial that carries no client version or
+      // API key. Without those, the WEB_REMIX client falls back to the version
+      // baked into youtubei.js, which YouTube now rejects with HTTP 400 —
+      // search, home feed, playlist refreshes and transcript lyrics all fail
+      // while server-side TV playback keeps working.
       const response = await tauriFetch("https://music.youtube.com/", {
         headers: {
           Accept: "text/html",
+          "Accept-Language": typeof navigator !== "undefined" ? navigator.language : "en-US",
+          // A fixed desktop Chrome agent, not navigator.userAgent: the parse
+          // below expects the desktop document, and mobile browsers get a
+          // different shell. It is independent of the user's own browser
+          // because the request is made by the server, not by the page.
+          "User-Agent": BOOTSTRAP_USER_AGENT,
         },
       });
       if (!response.ok) {
@@ -4530,20 +4593,32 @@ export class YouTubeMusicDataSource extends DataSource {
     let streamMimeType = "audio/mp4";
     const failures: string[] = [];
 
-    // Mint the po-token once per track and attach it to every client that
-    // attempts playback. YouTube withholds streaming URLs entirely (empty
-    // `url` on all formats) for requests without a valid, video-bound
-    // attestation — on every InnerTube client, not just the web ones.
+    // Mint the po-token once per track and attach it to every browser/mobile
+    // client that attempts playback. YouTube withholds streaming URLs
+    // entirely (empty `url` on all formats) for requests without a valid,
+    // video-bound attestation. TVHTML5 does not use BotGuard tokens — it is
+    // authenticated by the linked account's OAuth Bearer (injected by the
+    // server proxy) — so sending one there can only confuse the request.
     const poToken = await mintPoToken(track.id);
 
     for (const label of clientOrder) {
       try {
         const yt = await this.getClient(label);
-        if (poToken) {
-          yt.session.po_token = poToken;
-          if (yt.session.player) yt.session.player.po_token = poToken;
+        // A BotGuard token minted for the web clients is not valid for the TV
+        // or mobile clients (they use separate attestation programs), and
+        // sending one makes YouTube refuse the player call outright. Only
+        // attach it where it came from.
+        const clientPoToken = label === "tv" || label === "android" || label === "ios"
+          ? undefined
+          : poToken;
+        if (clientPoToken) {
+          yt.session.po_token = clientPoToken;
+          if (yt.session.player) yt.session.player.po_token = clientPoToken;
         }
-        const info = await yt.getBasicInfo(track.id, poToken ? { po_token: poToken } : undefined);
+        const info = await yt.getBasicInfo(
+          track.id,
+          clientPoToken ? { po_token: clientPoToken } : undefined,
+        );
         const urlLessFormats = (info.streaming_data?.adaptive_formats ?? []).length;
         if (urlLessFormats > 0 && !info.streaming_data?.adaptive_formats?.some(
           (candidate: any) => (typeof candidate.url === "string" && candidate.url.length > 0)
@@ -4558,7 +4633,10 @@ export class YouTubeMusicDataSource extends DataSource {
         }
         const audioFormats = (info.streaming_data?.adaptive_formats ?? []).filter(
           (candidate: any) => typeof candidate.mime_type === "string"
-            && candidate.mime_type.startsWith("audio/"),
+            && candidate.mime_type.startsWith("audio/")
+            // DRM-protected TV formats cannot be sent through
+            // /api/media/stream — the browser has no CDM for them.
+            && !candidate.drm_families && !candidate.fair_play_key_uri,
         );
         const mp4Formats = audioFormats.filter(
           (candidate: any) => candidate.mime_type.includes("audio/mp4"),
@@ -4609,11 +4687,12 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalError(
         "YouTubeMusicDataSource.resolveStream failed",
         new Error("No YouTube client returned a playable audio URL."),
-        { trackId: track.id, failures },
+        { trackId: track.id, failures, serverReason: this.lastServerResolveError },
       );
-      throw new Error(
-        `Unable to resolve a playable YouTube audio stream. (${failures.slice(-2).join("; ")})`,
-      );
+      const reason = this.lastServerResolveError
+        ? `${this.lastServerResolveError} (${failures.slice(-1).join("; ")})`
+        : failures.slice(-2).join("; ");
+      throw new Error(`Unable to resolve a playable YouTube audio stream. (${reason})`);
     }
 
     return {
@@ -4623,17 +4702,84 @@ export class YouTubeMusicDataSource extends DataSource {
     };
   }
 
+  /**
+   * Resolves through the server's credential ladder when an account is linked.
+   *
+   * The server holds the imported YouTube session (SAPISIDHASH) and the OAuth
+   * token, neither of which the browser can use directly — web clients reject
+   * OAuth, and this origin cannot read youtube.com cookies. Gated tracks are
+   * only reachable that way, so the ladder runs server-side first.
+   *
+   * Returns null on any failure so the caller can fall through to the
+   * anonymous client ladder; the reason is kept so the final error can point
+   * at the credential that is actually missing.
+   */
+  private async resolveStreamViaServer(
+    track: Track,
+    quality: AudioQuality,
+  ): Promise<{ url: string; mimeType: string; cookie?: string } | null> {
+    try {
+      // The gated player call needs a BotGuard token even with a signed-in
+      // cookie session, and the server cannot mint one YouTube accepts. The
+      // browser mints it and hands it to the server with this request.
+      const poToken = await mintPoToken(track.id);
+      const response = await fetch("/api/media/resolve", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ videoId: track.id, quality, ...(poToken ? { poToken } : {}) }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        this.lastServerResolveError = payload?.error ?? null;
+        logInternalWarn("YouTubeMusicDataSource.resolveStreamViaServer failed", {
+          trackId: track.id,
+          status: response.status,
+          error: payload?.error ?? null,
+        });
+        return null;
+      }
+
+      const payload = (await response.json().catch(() => null)) as
+        | { url?: string; mimeType?: string }
+        | null;
+      if (!payload?.url) return null;
+      logInternalInfo("YouTubeMusicDataSource.resolveStreamViaServer success", {
+        trackId: track.id,
+        mimeType: payload.mimeType ?? "audio/mp4",
+      });
+      return { url: payload.url, mimeType: payload.mimeType ?? "audio/mp4" };
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.resolveStreamViaServer threw", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   async resolveStreamUrl(
     track: Track,
     quality: AudioQuality = getStreamingQuality(),
   ): Promise<{ url: string; mimeType: string; cookie?: string }> {
-    // The attested web clients run first — they are the proven path when
+    this.lastServerResolveError = null;
+    // A linked account is resolved server-side first (TVHTML5 + OAuth), the
+    // only path YouTube accepts credentials on. Anything else — anonymous
+    // tracks, older servers, a failed TV lookup — falls through to the
+    // browser's attested client ladder below.
+    //
+    // The attested web clients run first there: they are the proven path when
     // BotGuard attestation succeeds (the mobile clients then cost nothing).
-    // ANDROID/IOS rescue playback when YouTube refuses the web clients;
-    // linked accounts keep the music client in front so authenticated
-    // playback/reporting wins when YouTube honors it.
+    // ANDROID/IOS rescue playback when YouTube refuses the web clients.
+    if (this.signedIn && usesAuthenticatedStreaming()) {
+      const viaServer = await this.resolveStreamViaServer(track, quality);
+      if (viaServer) return viaServer;
+    }
+
     const order: ClientLabel[] = usesAuthenticatedStreaming()
-      ? ["music", "web", "android", "ios", "anonymous"]
+      ? ["tv", "music", "web", "android", "ios", "anonymous"]
       : ["anonymous", "web", "music", "android", "ios"];
     return this.resolveStream(track, quality, order);
   }

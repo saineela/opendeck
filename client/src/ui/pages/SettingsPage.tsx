@@ -93,7 +93,13 @@ import {
   useDownloaderState,
 } from "../../plugins/official/downloader/downloaderStore";
 import { DOWNLOADER_PLUGIN_ID } from "../../plugins/official/downloader/manifest";
-import { getYouTubeLinkStatus, refreshAuthSession, useAuth } from "../../auth/authClient";
+import {
+  clearYouTubeCookies,
+  getYouTubeLinkStatus,
+  refreshAuthSession,
+  saveYouTubeCookies,
+  useAuth,
+} from "../../auth/authClient";
 import { QrCode } from "../components/QrCode";
 import {
   createApiKey,
@@ -349,6 +355,14 @@ export function SettingsPage({
   const authPrompt = libraryState.authPrompt;
   const [ytVerifyNote, setYtVerifyNote] = useState<string | null>(null);
   const [ytVerifyBusy, setYtVerifyBusy] = useState(false);
+  const [cookieStatus, setCookieStatus] = useState<{
+    linked: boolean;
+    updatedAt: number | null;
+  }>({ linked: false, updatedAt: null });
+  const [cookieDraft, setCookieDraft] = useState("");
+  const [cookieFormOpen, setCookieFormOpen] = useState(false);
+  const [cookieBusy, setCookieBusy] = useState(false);
+  const [cookieNote, setCookieNote] = useState<string | null>(null);
   const accountPlaybackEnabled = authenticatedStreaming && youtubeScrobbling;
   const isAdmin = auth.session.role === "admin";
   const debugOverlayEnabled = useDebugOverlayEnabled();
@@ -378,6 +392,46 @@ export function SettingsPage({
     await onSignIn({ reauthorize });
   };
 
+  const handleSaveYouTubeCookies = async () => {
+    if (cookieBusy || !cookieDraft.trim()) return;
+    setCookieBusy(true);
+    setCookieNote(null);
+    try {
+      const saved = await saveYouTubeCookies(cookieDraft);
+      setCookieStatus({ linked: saved.linked, updatedAt: saved.updatedAt });
+      setCookieDraft("");
+      setCookieFormOpen(false);
+      setCookieNote(
+        saved.accountName
+          ? `Saved — verified as ${saved.accountName}. Playback will use this session.`
+          : "Saved — playback will now use this YouTube session.",
+      );
+    } catch (error) {
+      setCookieNote(
+        error instanceof Error ? error.message : "Unable to save the YouTube session.",
+      );
+    } finally {
+      setCookieBusy(false);
+    }
+  };
+
+  const handleClearYouTubeCookies = async () => {
+    if (cookieBusy) return;
+    setCookieBusy(true);
+    setCookieNote(null);
+    try {
+      await clearYouTubeCookies();
+      setCookieStatus({ linked: false, updatedAt: null });
+      setCookieNote("YouTube session removed.");
+    } catch (error) {
+      setCookieNote(
+        error instanceof Error ? error.message : "Unable to remove the YouTube session.",
+      );
+    } finally {
+      setCookieBusy(false);
+    }
+  };
+
   /** Verify button: checks the link right now instead of waiting on polling. */
   const handleVerifyYouTube = async () => {
     if (ytVerifyBusy) return;
@@ -401,6 +455,24 @@ export function SettingsPage({
       setYtVerifyBusy(false);
     }
   };
+
+  useEffect(() => {
+    let active = true;
+    void getYouTubeLinkStatus()
+      .then((status) => {
+        if (!active) return;
+        setCookieStatus({
+          linked: Boolean(status.cookiesLinked),
+          updatedAt: status.cookiesUpdatedAt ?? null,
+        });
+      })
+      .catch(() => {
+        // The status call is advisory; a failure must not block settings.
+      });
+    return () => {
+      active = false;
+    };
+  }, [youtubeLinked]);
 
   useEffect(() => {
     if (activeTab !== "system") return undefined;
@@ -1106,6 +1178,97 @@ export function SettingsPage({
                 </div>
               )}
             </div>
+
+            {auth.session.authenticated && (
+              <div className={styles.cookiePanel}>
+                <div className={styles.cookiePanelHeader}>
+                  <span className={styles.toggleDescription}>
+                    <strong>Playback sign-in (YouTube cookies)</strong>
+                    <span>
+                      YouTube asks this network to sign in before it will stream
+                      music. The Google link above covers library reads; playback
+                      also needs the session cookie from a signed-in
+                      music.youtube.com tab.
+                    </span>
+                  </span>
+                  <span
+                    className={`${styles.cookieStatus} ${
+                      cookieStatus.linked ? styles.cookieStatusLinked : ""
+                    }`}
+                  >
+                    {cookieStatus.linked ? "Session saved" : "Not connected"}
+                  </span>
+                </div>
+
+                <div className={styles.cookieActions}>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    disabled={cookieBusy}
+                    onClick={() => setCookieFormOpen((open) => !open)}
+                  >
+                    {cookieStatus.linked ? "Replace cookies" : "Add cookies"}
+                  </button>
+                  {cookieStatus.linked && (
+                    <button
+                      className={styles.signOutButton}
+                      type="button"
+                      disabled={cookieBusy}
+                      onClick={() => void handleClearYouTubeCookies()}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                {cookieFormOpen && (
+                  <>
+                    <textarea
+                      className={styles.cookieInput}
+                      aria-label="YouTube session cookies"
+                      value={cookieDraft}
+                      onChange={(event) => setCookieDraft(event.target.value)}
+                      placeholder="SID=...; HSID=...; SSID=...; APISID=...; SAPISID=..."
+                      rows={4}
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                    <span className={styles.cookieHint}>
+                      On music.youtube.com while signed in: DevTools &rarr; Network
+                      &rarr; any <code>/youtubei/</code> request &rarr; Request
+                      Headers &rarr; <code>Cookie</code> &rarr; copy the whole value.
+                      Do not use <code>document.cookie</code>: the session cookies
+                      (HSID, SSID) are httpOnly and are excluded there, which is why
+                      a partial header looks connected but cannot play. The header is
+                      verified before it is saved, encrypted on the server, and never
+                      sent back to this browser.
+                    </span>
+                    <div className={styles.cookieActions}>
+                      <button
+                        className={styles.signInButton}
+                        type="button"
+                        disabled={cookieBusy || !cookieDraft.trim()}
+                        onClick={() => void handleSaveYouTubeCookies()}
+                      >
+                        {cookieBusy ? "Saving..." : "Save cookies"}
+                      </button>
+                      <button
+                        className={styles.secondaryButton}
+                        type="button"
+                        onClick={() => {
+                          setCookieFormOpen(false);
+                          setCookieDraft("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {cookieNote && <p className={styles.error}>{cookieNote}</p>}
+              </div>
+            )}
 
             {authPrompt && (
               <div className={styles.actionRow} role="status">

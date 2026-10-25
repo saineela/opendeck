@@ -1234,7 +1234,63 @@ describe("server integration", () => {
       const res = await fetch(`${running.base}/api/youtube/status`, {
         headers: { cookie },
       });
-      expect(await res.json()).toEqual({ state: "idle", linked: false });
+      expect(await res.json()).toEqual({
+        state: "idle",
+        linked: false,
+        cookiesLinked: false,
+        cookiesUpdatedAt: null,
+      });
+    });
+
+    it("stores playback cookies without ever echoing them and clears them", async () => {
+      seedUser(db, "yt-cookie-user");
+      const cookie = `${SESSION_COOKIE}=${createSession(db, "yt-cookie-user")}`;
+      const secret = "SID=session-value; HSID=hsid-value; SSID=ssid-value; APISID=apisid-value; SAPISID=sapisid-value";
+
+      // The import proves the session against YouTube before storing it.
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        const url = String(input);
+        if (url.includes("/youtubei/v1/account/account_menu")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ actions: [{ accountName: { simpleText: "Cookie User" } }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        return realFetch(input, init);
+      });
+
+      const save = await fetch(`${running.base}/api/youtube/cookies`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json", origin: running.base },
+        body: JSON.stringify({ cookie: secret }),
+      });
+      expect(save.status).toBe(200);
+      const saved = (await save.json()) as Record<string, unknown>;
+      expect(saved).toMatchObject({
+        linked: true,
+        updatedAt: expect.any(Number),
+        accountName: "Cookie User",
+      });
+      expect(JSON.stringify(saved)).not.toContain("sapisid-value");
+      vi.unstubAllGlobals();
+
+      const status = await fetch(`${running.base}/api/youtube/status`, { headers: { cookie } });
+      const statusBody = (await status.json()) as Record<string, unknown>;
+      expect(statusBody).toMatchObject({ linked: false, cookiesLinked: true });
+      expect(JSON.stringify(statusBody)).not.toContain("sapisid-value");
+
+      const remove = await fetch(`${running.base}/api/youtube/cookies`, {
+        method: "DELETE",
+        headers: { cookie, origin: running.base },
+      });
+      expect(remove.status).toBe(200);
+      const after = (await (
+        await fetch(`${running.base}/api/youtube/status`, { headers: { cookie } })
+      ).json()) as Record<string, unknown>;
+      expect(after).toMatchObject({ cookiesLinked: false, cookiesUpdatedAt: null });
     });
   });
 
@@ -1383,12 +1439,22 @@ describe("server integration", () => {
 
         // Unlink revokes remotely and clears local state.
         const unlink = await post("unlink");
-        expect(await unlink.json()).toEqual({ state: "idle", linked: false });
+        expect(await unlink.json()).toEqual({
+          state: "idle",
+          linked: false,
+          cookiesLinked: false,
+          cookiesUpdatedAt: null,
+        });
         expect(calls.revoke).toBe(1);
         const idle = await fetch(`${running.base}/api/youtube/status`, {
           headers: { cookie },
         });
-        expect(await idle.json()).toEqual({ state: "idle", linked: false });
+        expect(await idle.json()).toEqual({
+          state: "idle",
+          linked: false,
+          cookiesLinked: false,
+          cookiesUpdatedAt: null,
+        });
       } finally {
         vi.unstubAllGlobals();
         resetYouTubeClientIdentityCache();

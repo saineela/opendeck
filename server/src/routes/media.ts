@@ -2,9 +2,12 @@ import express, { type Request, type Response, type Router } from "express";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Db } from "../db.js";
+import type { ServerConfig } from "../config.js";
+import { requireAuth } from "../middleware/session.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { fetchAllowlisted } from "../services/safeFetch.js";
 import { recordPlay } from "../services/playHistory.js";
+import { resolveYouTubePlayback } from "../services/youtubePlayback.js";
 import { logger } from "../logger.js";
 
 /**
@@ -82,9 +85,59 @@ function recordStreamPlay(req: Request, db: Db, url: URL): void {
 
 }
 
-export function createMediaRoutes(db: Db): Router {
+export function createMediaRoutes(db: Db, config: ServerConfig): Router {
   const router = express.Router();
   const limiter = rateLimit({ name: "media", windowMs: 60_000, max: 300 });
+  const resolveLimiter = rateLimit({ name: "media-resolve", windowMs: 60_000, max: 120 });
+
+  /**
+   * Resolves a playback URL with the linked YouTube account's OAuth token.
+   *
+   * The browser cannot do this itself: YouTube rejects OAuth on the web and
+   * mobile InnerTube clients, and only the TVHTML5 client accepts it. That
+   * client also bypasses the anonymous "confirm you're not a bot" wall on
+   * gated music tracks, which is why resolution lives server-side.
+   *
+   * The returned URL is a short-lived googlevideo CDN link (no credentials) —
+   * the browser plays it through `GET /stream` below.
+   */
+  router.post("/resolve", requireAuth, resolveLimiter, async (req: Request, res: Response) => {
+    const videoId = typeof req.body?.videoId === "string" ? req.body.videoId : "";
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      res.status(400).json({ error: "A valid YouTube videoId is required." });
+      return;
+    }
+
+    const quality = req.body?.quality === "high" ? "high" : "normal";
+    // Optional browser-minted BotGuard token; the server cannot produce one
+    // that YouTube accepts, but this request can carry the browser's.
+    const poToken =
+      typeof req.body?.poToken === "string" && req.body.poToken.length <= 4096
+        ? req.body.poToken
+        : null;
+    const resolution = await resolveYouTubePlayback(
+      db,
+      config,
+      req.sessionUserId!,
+      videoId,
+      quality,
+      { poToken },
+    );
+    if (!resolution.ok) {
+      // 401 from YouTube means the saved YouTube credential is missing or
+      // stale, not that this app's session is invalid — never surface it as
+      // a 401 here. The attempt list says which client refused what, which is
+      // what the UI needs to point at the right fix.
+      res.status(502).json({
+        error: resolution.reason,
+        attempts: resolution.attempts,
+      });
+      return;
+    }
+
+    res.setHeader("cache-control", "no-store");
+    res.json(resolution.playback);
+  });
 
   router.get("/stream", limiter, async (req: Request, res: Response) => {
     const url = parseStreamUrl(req.query.url);

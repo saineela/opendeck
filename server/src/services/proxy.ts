@@ -2,6 +2,12 @@ import { logger } from "../logger.js";
 import type { Db } from "../db.js";
 import type { ServerConfig } from "../config.js";
 import { getValidAccessToken } from "./youtubeAccount.js";
+import {
+  buildYouTubeCookieHeaders,
+  isYouTubeHost,
+  loadYouTubeCookies,
+  youTubeRequestOrigin,
+} from "./youtubeCookies.js";
 import { fetchAllowlisted } from "./safeFetch.js";
 
 /**
@@ -138,16 +144,13 @@ function needsBearerAuth(url: URL): boolean {
  * The whole WEB family answers `400 Request contains an invalid argument` to
  * any OAuth-authenticated request — verified live against music.youtube.com:
  * the same search body returns 225 KB anonymously and 400 the moment the
- * token is attached. What those clients want is a browser cookie, which this
- * server does not have; what accepts the token is TVHTML5, which is why
- * account-scoped library reads are proxied through TVHTML5 server-side
- * (see services/youtubeLibrary.ts).
+ * token is attached. Upstream youtubei.js authentication guidance likewise
+ * limits OAuth to the TV client. Account-scoped library reads use TVHTML5
+ * server-side (see services/youtubeLibrary.ts); other clients, including the
+ * app's WEB_REMIX and mobile playback clients, must not receive the token.
  *
- * The browser's youtubei.js Music client is WEB_REMIX, so injecting here
- * would break search, the home feed, and play reporting for every linked
- * account. Skipping injection lets those requests run anonymously, which is
- * exactly what an unlinked account gets today — so linking an account can
- * only ever add capabilities, never remove them.
+ * Keep this list explicit so supported authenticated clients still receive
+ * the token if another use case is added.
  */
 const OAUTH_REJECTING_CLIENTS = new Set([
   "WEB",
@@ -156,7 +159,47 @@ const OAUTH_REJECTING_CLIENTS = new Set([
   "WEB_KIDS",
   "WEB_EMBEDDED_PLAYER",
   "MUSIC_KIDS",
+  "ANDROID",
+  "IOS",
+  "ANDROID_MUSIC",
+  "TVHTML5_SIMPLY",
+  "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
 ]);
+
+/**
+ * Clients that accept the user's YouTube session cookie (the web family).
+ * Mobile clients use their own attestation, and TVHTML5 uses OAuth.
+ */
+const COOKIE_AUTH_CLIENTS = new Set([
+  "1",
+  "67",
+  "WEB",
+  "WEB_REMIX",
+  "MWEB",
+  "WEB_KIDS",
+  "WEB_EMBEDDED_PLAYER",
+  "WEB_CREATOR",
+  "MUSIC_KIDS",
+]);
+
+function isTvClient(clientName: string | null): boolean {
+  return clientName === "7" || (clientName ?? "").startsWith("TVHTML5");
+}
+
+/**
+ * Origin/referer YouTube's web clients always send.
+ *
+ * The proxy drops client-supplied Origin/Referer (they are forgeable and the
+ * upstream answers differently for a foreign origin), but omitting them turns
+ * `WEB`/`WEB_REMIX` playback into `UNPLAYABLE — Video unavailable` even for
+ * public tracks. The value is derived from the hop itself, never from the
+ * caller: YouTube rejects a request whose Origin does not match Host
+ * (`400 Bad request: Origin doesn't match Host for XD3.`), and the same
+ * WEB_REMIX client calls www.youtube.com and music.youtube.com.
+ */
+function webOriginFor(url: URL): string {
+  return youTubeRequestOrigin(url);
+}
 
 /** Reads `context.client.clientName` out of an InnerTube request body. */
 function innerTubeClientName(body: Buffer | undefined): string | null {
@@ -226,30 +269,48 @@ export async function forwardProxyRequest(
   // ever attached to youtube.com endpoints that need it — never carried
   // across a redirect to another (even allowlisted) origin.
   const bearerToken = userId ? await getValidAccessToken(db, config, userId) : null;
+  // Session cookies are the only credentials WEB_REMIX accepts. They are
+  // loaded only for this user and only ever attached to youtube.com.
+  const cookieHeader = userId ? loadYouTubeCookies(db, config, userId) : null;
   const requestClient = innerTubeClientName(body);
   const clientRejectsAuth = requestClient !== null && OAUTH_REJECTING_CLIENTS.has(requestClient);
+  const cookieEligible = Boolean(cookieHeader)
+    && !isTvClient(requestClient)
+    && (requestClient === null || COOKIE_AUTH_CLIENTS.has(requestClient));
 
   let response: Response;
   try {
     response = await fetchAllowlisted(url, baseInit, {
       isAllowed: isHostAllowed,
       prepare: (hopUrl, init) => {
-        if (!bearerToken || !needsBearerAuth(hopUrl)) return init;
-        // The WEB family 400s on any OAuth token; leave those anonymous.
-        if (clientRejectsAuth) return init;
-        return {
-          ...init,
-          headers: {
-            ...(init.headers as Record<string, string> | undefined),
-            authorization: `Bearer ${bearerToken}`,
-            // InnerTube refuses account-scoped calls (library browse, liked
-            // songs, history) with a bare Bearer token — it also requires
-            // X-Goog-AuthUser, same as the SAPISID cookie flow. The device
-            // code link binds exactly one Google account, so index 0.
-            "x-goog-authuser": "0",
-            "x-goog-request-time": String(Math.floor(Date.now() / 1000)),
-          },
+        // Never leak credentials to a redirect target on another origin.
+        if (!isYouTubeHost(hopUrl)) return init;
+
+        const baseHeaders = (init.headers ?? {}) as Record<string, string>;
+        const origin = webOriginFor(hopUrl);
+        const headers: Record<string, string> = {
+          ...baseHeaders,
+          origin,
+          "x-origin": origin,
+          referer: `${origin}/`,
         };
+
+        if (cookieEligible && init.method !== "HEAD") {
+          Object.assign(headers, buildYouTubeCookieHeaders(cookieHeader!, hopUrl));
+          return { ...init, headers };
+        }
+
+        if (bearerToken && needsBearerAuth(hopUrl) && !clientRejectsAuth) {
+          headers.authorization = `Bearer ${bearerToken}`;
+          // InnerTube refuses account-scoped calls (library browse, liked
+          // songs, history) with a bare Bearer token — it also requires
+          // X-Goog-AuthUser, same as the SAPISID cookie flow. The device
+          // code link binds exactly one Google account, so index 0.
+          headers["x-goog-authuser"] = "0";
+          headers["x-goog-request-time"] = String(Math.floor(Date.now() / 1000));
+        }
+
+        return { ...init, headers };
       },
     });
   } catch (error) {
@@ -275,6 +336,20 @@ export async function forwardProxyRequest(
     const lower = key.toLowerCase();
     if (!STRIPPED_RESPONSE_HEADERS.has(lower)) responseHeaders[lower] = value;
   });
+
+  // InnerTube failures are otherwise invisible: the browser receives the
+  // upstream status inside a 200 proxy envelope, so the client only reports a
+  // bare "status code 400" with no reason. Log what YouTube actually said.
+  if (response.status >= 400 && url.hostname.endsWith("youtube.com")) {
+    logger.warn("proxy.youtube_upstream_error", {
+      host: url.hostname,
+      pathname: url.pathname,
+      status: response.status,
+      client: requestClient,
+      authenticated: Boolean(bearerToken) || cookieEligible,
+      body: buffer.toString("utf8").slice(0, 400),
+    });
+  }
 
   return {
     ok: true,

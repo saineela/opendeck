@@ -15,6 +15,13 @@ vi.mock("./services/youtubeAccount.js", () => ({
   getValidAccessToken: vi.fn(async () => "test-access-token"),
 }));
 
+// The real loader needs a database; these tests only exercise Bearer injection,
+// so keep cookie auth out of the picture (cookie auth has its own suite).
+vi.mock("./services/youtubeCookies.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./services/youtubeCookies.js")>();
+  return { ...actual, loadYouTubeCookies: vi.fn(() => null) };
+});
+
 const { getValidAccessToken } = await import("./services/youtubeAccount.js");
 
 const db = {} as Db;

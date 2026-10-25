@@ -2,6 +2,7 @@ import express, { type Request, type Response, type Router } from "express";
 import type { Db } from "../db.js";
 import type { ServerConfig } from "../config.js";
 import { rateLimit } from "../middleware/rateLimit.js";
+import { logger } from "../logger.js";
 import { forwardProxyRequest, type ProxyRequestInput } from "../services/proxy.js";
 
 function parseInput(body: unknown): ProxyRequestInput | null {
@@ -39,6 +40,24 @@ export function createProxyRoutes(db: Db, config: ServerConfig): Router {
     }
     const result = await forwardProxyRequest(db, config, input, req.sessionUserId ?? null);
     if (!result.ok) {
+      logger.warn("proxy.rejected", {
+        status: result.status,
+        error: result.error,
+        host: (() => {
+          try {
+            return new URL(input.url).hostname;
+          } catch {
+            return null;
+          }
+        })(),
+        pathname: (() => {
+          try {
+            return new URL(input.url).pathname;
+          } catch {
+            return null;
+          }
+        })(),
+      });
       res.status(result.status).json({ error: result.error });
       return;
     }

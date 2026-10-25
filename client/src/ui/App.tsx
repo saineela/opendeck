@@ -46,7 +46,6 @@ import {
   setAppSetting,
 } from "../internal/appSettings";
 import {
-  getYouTubeLinkStatus,
   refreshAuthSession,
   getAuthSnapshot,
   useAuth,
@@ -793,6 +792,13 @@ export default function App() {
     setNextTabId((currentId) => currentId + 1);
   };
 
+  /**
+   * Playback failures are an attestation/credentials problem, not an OAuth
+   * problem: the device-code link only authenticates library reads (TVHTML5),
+   * while the gated catalogue needs the imported YouTube *session*. So the
+   * action opens Settings, where Playback sign-in explains what is missing,
+   * instead of starting a re-authorization that cannot fix playback.
+   */
   const handlePlaybackYoutubeSignIn = useCallback(async () => {
     lastErrorNotificationRef.current = null;
     if (!getAuthSnapshot().authenticated) {
@@ -800,13 +806,8 @@ export default function App() {
       return;
     }
     handleOpenSettings();
-    await libraryController.signIn({ reauthorize: true });
-    const reauthorizationState = libraryController.getState();
-    if (reauthorizationState.status !== "ready" || reauthorizationState.error) return;
-    const linkState = await getYouTubeLinkStatus().catch(() => null);
-    if (!linkState?.linked) return;
-    await playerController.play();
   }, [handleOpenSettings, navigateTo]);
+
 
   useEffect(() => {
     if (playerState.status !== "error" || !playerState.error) return;
@@ -814,14 +815,15 @@ export default function App() {
     const key = `playback:${message}`;
     if (lastErrorNotificationRef.current === key) return;
     lastErrorNotificationRef.current = key;
-    const needsYouTubeSignIn = /unable to resolve a playable youtube audio stream|ios:\s*request(?:\s+to)? failed with status|youtube.*(?:sign.?in|auth|credential|token)/i.test(message);
-    const youtubeLinked = getAuthSnapshot().youtubeLinked;
+    const needsYouTubeSignIn = /unable to resolve a playable youtube audio stream|ios:\s*request(?:\s+to)? failed with status|playback sign-in|sign in to confirm|youtube.*(?:sign.?in|auth|credential|token)/i.test(message);
     appErrorManager.report(message, {
       title: "Playback failed",
       ...(needsYouTubeSignIn
         ? {
           action: {
-            label: youtubeLinked ? "Reconnect YouTube" : "Sign in to YouTube",
+            label: getAuthSnapshot().authenticated
+              ? "Fix YouTube playback"
+              : "Sign in",
             run: handlePlaybackYoutubeSignIn,
           },
         }

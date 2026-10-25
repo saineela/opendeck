@@ -5,6 +5,7 @@ import { openDatabase, type Db } from "../db.js";
 import { createSession } from "../middleware/session.js";
 import { configureProxyHosts, forwardProxyRequest, isHostAllowed } from "./proxy.js";
 import { saveYouTubeTokens } from "./youtubeAccount.js";
+import { saveYouTubeCookies } from "./youtubeCookies.js";
 import type { YouTubeTokens } from "./youtubeOAuth.js";
 
 function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
@@ -191,10 +192,38 @@ describe("forwardProxyRequest", () => {
     const sent = calls[0];
     expect(sent.headers.cookie).toBeUndefined();
     expect(sent.headers.authorization).toBeUndefined();
-    expect(sent.headers.origin).toBeUndefined();
-    expect(sent.headers.referer).toBeUndefined();
+    // Caller-supplied Origin/Referer are discarded and replaced with the value
+    // YouTube's own web client sends — a foreign origin turns playback into
+    // "Video unavailable".
+    expect(sent.headers.origin).toBe("https://www.youtube.com");
+    expect(sent.headers.referer).toBe("https://www.youtube.com/");
     expect(sent.headers["content-type"]).toBe("application/json");
     expect(sent.headers["x-youtube-client-name"]).toBe("1");
+  });
+
+  it("matches Origin to the request host for WEB_REMIX calls on www.youtube.com", async () => {
+    // youtubei.js routes WEB_REMIX InnerTube calls to www.youtube.com. Sending
+    // Origin: https://music.youtube.com made YouTube reject every search and
+    // browse with 400 "Origin doesn't match Host for XD3".
+    const calls = stubFetch(() => new Response("{}"));
+    const result = await forwardProxyRequest(
+      db,
+      makeConfig(),
+      {
+        url: "https://www.youtube.com/youtubei/v1/search",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body_base64: Buffer.from(
+          JSON.stringify({ context: { client: { clientName: "WEB_REMIX" } }, query: "adele" }),
+        ).toString("base64"),
+      },
+      null,
+    );
+    expect(result.ok).toBe(true);
+    const sent = calls[0];
+    expect(sent.headers.origin).toBe("https://www.youtube.com");
+    expect(sent.headers["x-origin"]).toBe("https://www.youtube.com");
+    expect(sent.headers.referer).toBe("https://www.youtube.com/");
   });
 
   it("returns upstream status, headers, and body", async () => {
@@ -267,6 +296,7 @@ describe("forwardProxyRequest", () => {
           url: "https://music.youtube.com/youtubei/v1/browse",
           method: "POST",
           headers: { "content-type": "application/json" },
+          body_base64: Buffer.from(JSON.stringify({ context: { client: { clientName: "TVHTML5" } } })).toString("base64"),
         },
         userId,
       );
@@ -274,6 +304,31 @@ describe("forwardProxyRequest", () => {
       expect(calls[0].headers.authorization).toBe("Bearer yt-access-token");
       expect(calls[0].headers["x-goog-request-time"]).toMatch(/^\d+$/);
     });
+
+    it.each(["ANDROID", "IOS", "ANDROID_MUSIC", "TVHTML5_SIMPLY", "TVHTML5_SIMPLY_EMBEDDED_PLAYER"])(
+      "does not inject TV-only OAuth into %s player requests",
+      async (clientName) => {
+        const userId = linkUser();
+        const calls = stubFetch(() => new Response("{}"));
+        const body = JSON.stringify({ context: { client: { clientName } } });
+
+        const result = await forwardProxyRequest(
+          db,
+          config,
+          {
+            url: "https://www.youtube.com/youtubei/v1/player",
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body_base64: Buffer.from(body).toString("base64"),
+          },
+          userId,
+        );
+
+        expect(result.ok).toBe(true);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].headers.authorization).toBeUndefined();
+      },
+    );
 
     it("does not inject a Bearer token for non-InnerTube hosts or paths", async () => {
       const userId = linkUser();
@@ -311,6 +366,100 @@ describe("forwardProxyRequest", () => {
       );
       expect(userId).toBeTruthy();
       expect(calls[0].headers.authorization).toBeUndefined();
+    });
+  });
+
+  describe("YouTube session cookies", () => {
+    const config = makeConfig();
+    const cookie = "SID=session; HSID=hsid; SSID=ssid; APISID=apisid; SAPISID=sapisid";
+
+    function linkUserWithCookies(): string {
+      const userId = crypto.randomUUID();
+      db.prepare(
+        "INSERT INTO users (id, google_sub, name, email, picture, created_at, last_login_at) VALUES (?, ?, ?, ?, NULL, ?, ?)",
+      ).run(userId, `sub-${userId}`, "Test User", "t@example.com", Date.now(), Date.now());
+      const saved = saveYouTubeCookies(db, config, userId, cookie);
+      expect(saved.ok).toBe(true);
+      return userId;
+    }
+
+    it("signs WEB_REMIX requests with the stored cookie instead of Bearer", async () => {
+      const userId = linkUserWithCookies();
+      const calls = stubFetch(() => new Response("{}"));
+      const body = JSON.stringify({ context: { client: { clientName: "WEB_REMIX" } } });
+
+      const result = await forwardProxyRequest(
+        db,
+        config,
+        {
+          url: "https://music.youtube.com/youtubei/v1/player",
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body_base64: Buffer.from(body).toString("base64"),
+        },
+        userId,
+      );
+
+      expect(result.ok).toBe(true);
+      expect(calls[0].headers.cookie).toBe(cookie);
+      expect(calls[0].headers.authorization).toMatch(/^SAPISIDHASH \d+_[0-9a-f]{40}$/);
+      expect(calls[0].headers["x-goog-authuser"]).toBe("0");
+      expect(calls[0].headers.origin).toBe("https://music.youtube.com");
+    });
+
+    it("keeps TVHTML5 on OAuth, never mixing the cookie into a TV request", async () => {
+      const userId = linkUserWithCookies();
+      const tokens: YouTubeTokens = {
+        access_token: "yt-access-token",
+        refresh_token: "yt-refresh-token",
+        expiry_date: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        scope: "https://www.googleapis.com/auth/youtube",
+        token_type: "Bearer",
+      };
+      saveYouTubeTokens(db, config, userId, tokens);
+
+      const calls = stubFetch(() => new Response("{}"));
+      const body = JSON.stringify({ context: { client: { clientName: "TVHTML5" } } });
+      await forwardProxyRequest(
+        db,
+        config,
+        {
+          url: "https://music.youtube.com/youtubei/v1/player",
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body_base64: Buffer.from(body).toString("base64"),
+        },
+        userId,
+      );
+
+      expect(calls[0].headers.authorization).toBe("Bearer yt-access-token");
+      expect(calls[0].headers.cookie).toBeUndefined();
+    });
+
+    it("authenticates the music.youtube.com metadata bootstrap", async () => {
+      const userId = linkUserWithCookies();
+      const calls = stubFetch(() => new Response("<html></html>"));
+      await forwardProxyRequest(
+        db,
+        config,
+        { url: "https://music.youtube.com/", method: "GET", headers: {} },
+        userId,
+      );
+      expect(calls[0].headers.cookie).toBe(cookie);
+      expect(calls[0].headers.authorization).toBeUndefined();
+      expect(calls[0].headers.referer).toBe("https://music.youtube.com/");
+    });
+
+    it("never sends the cookie to a non-YouTube host", async () => {
+      const userId = linkUserWithCookies();
+      const calls = stubFetch(() => new Response(""));
+      await forwardProxyRequest(
+        db,
+        config,
+        { url: "https://i.ytimg.com/vi/x/hq.jpg", method: "GET", headers: {} },
+        userId,
+      );
+      expect(calls[0].headers.cookie).toBeUndefined();
     });
   });
 });
