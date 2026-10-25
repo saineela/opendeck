@@ -257,7 +257,7 @@ interface SettingsPageProps {
   libraryController: LibraryController;
   libraryState: LibraryState;
   onRestartOnboarding: () => void;
-  onSignIn: () => Promise<void>;
+  onSignIn: (options?: { reauthorize?: boolean }) => Promise<void>;
 }
 
 export function SettingsPage({
@@ -373,9 +373,9 @@ export function SettingsPage({
     }
   };
 
-  const handleConnectYouTube = async () => {
+  const handleConnectYouTube = async (reauthorize = false) => {
     setYtVerifyNote(null);
-    await onSignIn();
+    await onSignIn({ reauthorize });
   };
 
   /** Verify button: checks the link right now instead of waiting on polling. */
@@ -1085,21 +1085,36 @@ export function SettingsPage({
                   </button>
                 </div>
               ) : (
-                <button
-                  className={styles.signOutButton}
-                  type="button"
-                  onClick={() => void libraryController.signOut()}
-                >
-                  <IconLogout size={18} />
-                  Sign out
-                </button>
+                <div className={styles.accountActions}>
+                  <button
+                    className={styles.secondaryButton}
+                    type="button"
+                    disabled={authBusy}
+                    onClick={() => void handleConnectYouTube(true)}
+                  >
+                    <IconLogin size={18} />
+                    {authBusy ? "Waiting for Google..." : "Reconnect YouTube"}
+                  </button>
+                  <button
+                    className={styles.signOutButton}
+                    type="button"
+                    onClick={() => void libraryController.signOut()}
+                  >
+                    <IconLogout size={18} />
+                    Sign out
+                  </button>
+                </div>
               )}
             </div>
 
-            {libraryState.status === "authorizing" && authPrompt && (
+            {authPrompt && (
               <div className={styles.actionRow} role="status">
                 <span className={styles.toggleDescription}>
-                  <strong>Approve YouTube Music access</strong>
+                  <strong>
+                    {libraryState.status === "authorizing" && youtubeLinked
+                      ? "Reconnect YouTube Music"
+                      : "Approve YouTube Music access"}
+                  </strong>
                   <span>
                     Scan with your phone — it opens YouTube's activation page with the
                     code pre-filled. Or open <u>{authPrompt.verificationUrl}</u> and type

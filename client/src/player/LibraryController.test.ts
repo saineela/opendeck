@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DataSource } from "../datasource/DataSource";
-import type { LibrarySnapshot, Track } from "../datasource/types";
+import type { AuthPrompt, LibrarySnapshot, Track } from "../datasource/types";
 import { LibraryController } from "./LibraryController";
 
 const library: LibrarySnapshot = {
@@ -16,6 +16,7 @@ class ReturningUserSource extends DataSource {
   constructor(
     private readonly libraryResult: () => Promise<LibrarySnapshot> = async () => library,
     private readonly cachedLibrary: LibrarySnapshot | null = null,
+    private readonly signInResult?: () => Promise<void>,
   ) {
     super();
   }
@@ -39,6 +40,15 @@ class ReturningUserSource extends DataSource {
   override async getCachedLibrary(): Promise<LibrarySnapshot | null> {
     return this.cachedLibrary;
   }
+
+  override async signIn(onPrompt: (prompt: AuthPrompt) => void): Promise<void> {
+    if (this.signInResult) return this.signInResult();
+    onPrompt({
+      verificationUrl: "https://www.youtube.com/activate",
+      userCode: "ABCD-EFGH",
+      expiresInSec: 300,
+    });
+  }
 }
 
 describe("LibraryController session restoration", () => {
@@ -60,6 +70,23 @@ describe("LibraryController session restoration", () => {
 
       expect(controller.getState().status).toBe("ready");
       expect(controller.getState().library).toEqual(library);
+    });
+  });
+
+  it("keeps the current library visible if YouTube reauthorization fails", async () => {
+    await runWithWindow(async () => {
+      const source = new ReturningUserSource(async () => library, library, async () => {
+        throw new Error("reauthorization unavailable");
+      });
+      const controller = new LibraryController(source);
+      await controller.initialize();
+
+      const before = controller.getState().library;
+      await controller.signIn({ reauthorize: true });
+
+      expect(controller.getState().status).toBe("ready");
+      expect(controller.getState().library).toBe(before);
+      expect(controller.getState().error).toContain("reauthorization unavailable");
     });
   });
 

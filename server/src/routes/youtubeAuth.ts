@@ -115,16 +115,15 @@ function buildStatus(db: Db, userId: string): YoutubeStatusResponse {
   }
   if (pending && pending.state === "error") {
     return {
-      state: linked ? "linked" : "error",
+      state: "error",
       linked,
       error: pending.error,
     };
   }
   if (pending && pending.state === "pending" && pending.expiresAt > Date.now()) {
-    if (linked) return { state: "linked", linked };
     return {
       state: "pending",
-      linked: false,
+      linked,
       verificationUrl: pending.verificationUrl,
       userCode: pending.userCode,
       expiresInSec: Math.ceil((pending.expiresAt - Date.now()) / 1000),
@@ -177,7 +176,11 @@ export function createYoutubeAuthRoutes(db: Db, config: ServerConfig): Router {
   router.post("/link", requireAuth, startLimit, async (req: Request, res: Response) => {
     const userId = req.sessionUserId!;
     const existing = buildStatus(db, userId);
-    if (existing.state === "linked" || existing.state === "pending") {
+    const reauthorize = req.body?.reauthorize === true;
+    if (
+      existing.state === "pending"
+      || (existing.state === "linked" && !reauthorize)
+    ) {
       res.json(existing);
       return;
     }

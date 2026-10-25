@@ -30,7 +30,7 @@ export abstract class DataSource {
   beginPlayReport?(track: Track): Promise<boolean>;
   updatePlayReport?(track: Track, positionSec: number, final: boolean): Promise<void>;
   restoreSession?(): Promise<boolean>;
-  signIn?(onPrompt: (prompt: AuthPrompt) => void): Promise<void>;
+  signIn?(onPrompt: (prompt: AuthPrompt) => void, options?: { reauthorize?: boolean }): Promise<void>;
   signOut?(): Promise<void>;
   getCachedLibrary?(): Promise<LibrarySnapshot | null>;
   getLibrary?(onUpdate?: (library: LibrarySnapshot) => void): Promise<LibrarySnapshot>;

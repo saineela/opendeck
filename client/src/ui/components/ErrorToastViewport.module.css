@@ -66,6 +66,28 @@
   gap: 6px;
 }
 
+.actionButton {
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.actionButton:hover {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.actionButton:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .iconButton,
 .closeButton {
   width: 0;

@@ -45,7 +45,12 @@ import {
   removeAppSetting,
   setAppSetting,
 } from "../internal/appSettings";
-import { refreshAuthSession, getAuthSnapshot, useAuth } from "../auth/authClient";
+import {
+  getYouTubeLinkStatus,
+  refreshAuthSession,
+  getAuthSnapshot,
+  useAuth,
+} from "../auth/authClient";
 import { restoreLibraryAfterAccountSignIn } from "./pages/loginSessionRestore";
 import {
   pushSupported,
@@ -486,17 +491,6 @@ export default function App() {
   }, [libraryState.error, libraryState.status]);
 
   useEffect(() => {
-    if (playerState.status !== "error" || !playerState.error) return;
-    const message = playerState.error;
-    const key = `playback:${message}`;
-    if (lastErrorNotificationRef.current === key) return;
-    lastErrorNotificationRef.current = key;
-    appErrorManager.report(message, {
-      title: "Playback failed",
-    });
-  }, [playerState.error, playerState.status]);
-
-  useEffect(() => {
     const elapsed = performance.now() - loadingScreenStartedAtRef.current;
     const remainingMaximum = Math.max(0, LOADING_SCREEN_MAX_MS - LOADING_SCREEN_FADE_MS - elapsed);
     const maxTimer = window.setTimeout(dismissLoadingScreen, remainingMaximum);
@@ -692,15 +686,15 @@ export default function App() {
 
   const handleCreateTab = () => createTab();
 
-  const handleSignIn = async () => {
+  const handleSignIn = async (options: { reauthorize?: boolean } = {}) => {
     // No OpenDeck account yet: the branded /login page comes first, then
     // the YouTube Music linking flow can follow if the user wants it.
     if (!getAuthSnapshot().authenticated) {
       navigateTo("/login");
       return;
     }
-    await libraryController.signIn();
-    if (libraryController.getState().status !== "ready") return;
+    await libraryController.signIn(options);
+    if (libraryController.getState().status !== "ready" || options.reauthorize) return;
 
     playerUIStore.setLyricsOpen(false);
     const newId = nextTabId.toString();
@@ -798,6 +792,42 @@ export default function App() {
     setActiveTabId(newId);
     setNextTabId((currentId) => currentId + 1);
   };
+
+  const handlePlaybackYoutubeSignIn = useCallback(async () => {
+    lastErrorNotificationRef.current = null;
+    if (!getAuthSnapshot().authenticated) {
+      navigateTo("/login");
+      return;
+    }
+    handleOpenSettings();
+    await libraryController.signIn({ reauthorize: true });
+    const reauthorizationState = libraryController.getState();
+    if (reauthorizationState.status !== "ready" || reauthorizationState.error) return;
+    const linkState = await getYouTubeLinkStatus().catch(() => null);
+    if (!linkState?.linked) return;
+    await playerController.play();
+  }, [handleOpenSettings, navigateTo]);
+
+  useEffect(() => {
+    if (playerState.status !== "error" || !playerState.error) return;
+    const message = playerState.error;
+    const key = `playback:${message}`;
+    if (lastErrorNotificationRef.current === key) return;
+    lastErrorNotificationRef.current = key;
+    const needsYouTubeSignIn = /unable to resolve a playable youtube audio stream|ios:\s*request(?:\s+to)? failed with status|youtube.*(?:sign.?in|auth|credential|token)/i.test(message);
+    const youtubeLinked = getAuthSnapshot().youtubeLinked;
+    appErrorManager.report(message, {
+      title: "Playback failed",
+      ...(needsYouTubeSignIn
+        ? {
+          action: {
+            label: youtubeLinked ? "Reconnect YouTube" : "Sign in to YouTube",
+            run: handlePlaybackYoutubeSignIn,
+          },
+        }
+        : {}),
+    });
+  }, [handlePlaybackYoutubeSignIn, playerState.error, playerState.status]);
 
   const handleOpenHistory = () => {
     playerUIStore.setLyricsOpen(false);
