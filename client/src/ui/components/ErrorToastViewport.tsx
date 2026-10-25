@@ -32,6 +32,15 @@ function ErrorToast({ notification }: { notification: AppErrorNotification }) {
         <span>{getVisibleMessage(notification.message)}</span>
       </div>
       <div className={styles.actions}>
+        {notification.action && (
+          <button
+            className={styles.actionButton}
+            type="button"
+            onClick={() => void notification.action?.run()}
+          >
+            {notification.action.label}
+          </button>
+        )}
         <button
           className={styles.iconButton}
           type="button"
