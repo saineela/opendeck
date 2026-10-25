@@ -264,22 +264,39 @@ export class LibraryController {
     }
   }
 
-  async signIn(): Promise<void> {
+  async signIn(options: { reauthorize?: boolean } = {}): Promise<void> {
     if (!this.dataSource.signIn) return;
-    logInternalInfo("LibraryController.signIn start");
-    this.setState({ status: "authorizing", authPrompt: null, error: null });
+    logInternalInfo("LibraryController.signIn start", {
+      reauthorize: options.reauthorize === true,
+    });
+    if (!options.reauthorize) {
+      this.setState({ status: "authorizing", authPrompt: null, error: null });
+    }
     try {
       await this.dataSource.signIn((authPrompt) => {
         logInternalInfo("LibraryController.signIn prompt received", {
           verificationUrl: authPrompt.verificationUrl,
           expiresInSec: authPrompt.expiresInSec,
         });
-        this.setState({ status: "authorizing", authPrompt, error: null });
-      });
+        this.setState({
+          status: "authorizing",
+          authPrompt,
+          error: null,
+        });
+      }, options);
       logInternalInfo("LibraryController.signIn authentication complete");
       await this.refreshAfterSignIn();
       logInternalInfo("LibraryController.signIn refresh complete");
     } catch (error) {
+      if (options.reauthorize && this.state.library) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.setState({
+          status: "ready",
+          authPrompt: null,
+          error: `YouTube Music reauthorization failed. ${detail}`,
+        });
+        return;
+      }
       this.setFailure("YouTube Music sign-in failed.", error);
     }
   }

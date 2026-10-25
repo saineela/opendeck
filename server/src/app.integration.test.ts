@@ -1284,8 +1284,8 @@ describe("server integration", () => {
           return Promise.resolve(
             new Response(
               JSON.stringify({
-                access_token: "yt-access-token",
-                refresh_token: "yt-refresh-token",
+                access_token: `yt-access-token-${calls.token}`,
+                refresh_token: `yt-refresh-token-${calls.token}`,
                 expires_in: 3600,
                 scope: "https://www.googleapis.com/auth/youtube",
                 token_type: "Bearer",
@@ -1306,11 +1306,11 @@ describe("server integration", () => {
       try {
         seedUser(db, "yt-link-user");
         const cookie = `${SESSION_COOKIE}=${createSession(db, "yt-link-user")}`;
-        const post = (route: string) =>
+        const post = (route: string, body: Record<string, unknown> = {}) =>
           fetch(`${running.base}/api/youtube/${route}`, {
             method: "POST",
             headers: { "content-type": "application/json", origin: running.base, cookie },
-            body: "{}",
+            body: JSON.stringify(body),
           });
 
         const link = await post("link");
@@ -1347,16 +1347,39 @@ describe("server integration", () => {
           | { ciphertext: string; nonce: string; auth_tag: string }
           | undefined;
         expect(row).toBeTruthy();
-        expect(row!.ciphertext).not.toContain("yt-access-token");
-        expect(row!.ciphertext).not.toContain("yt-refresh-token");
+        expect(row!.ciphertext).not.toContain("yt-access-token-1");
+        expect(row!.ciphertext).not.toContain("yt-refresh-token-1");
 
         // The status payload never leaks credentials to the client.
         const statusRes = await fetch(`${running.base}/api/youtube/status`, {
           headers: { cookie },
         });
         const statusText = await statusRes.text();
-        expect(statusText).not.toContain("yt-access-token");
-        expect(statusText).not.toContain("yt-refresh-token");
+        expect(statusText).not.toContain("yt-access-token-1");
+        expect(statusText).not.toContain("yt-refresh-token-1");
+
+        // Reauthorization keeps an existing link usable until the replacement
+        // device-code grant succeeds, then transparently replaces its tokens.
+        const reauthorize = await post("link", { reauthorize: true });
+        expect(reauthorize.status).toBe(200);
+        expect(await reauthorize.json()).toMatchObject({ state: "pending", linked: true });
+        const linkedWhilePending = await fetch(`${running.base}/api/youtube/status`, {
+          headers: { cookie },
+        });
+        expect(await linkedWhilePending.json()).toMatchObject({ state: "pending", linked: true });
+        expect(calls.device).toBe(2);
+        const stillEncrypted = db
+          .prepare("SELECT ciphertext FROM youtube_tokens WHERE user_id = ?")
+          .get("yt-link-user") as { ciphertext: string };
+        expect(stillEncrypted.ciphertext).toBeTruthy();
+        await waitFor(async () => {
+          const res = await fetch(`${running.base}/api/youtube/status`, {
+            headers: { cookie },
+          });
+          const body = (await res.json()) as { state: string; linked: boolean };
+          return body.state === "linked" && body.linked === true;
+        }, 10_000);
+        expect(calls.token).toBe(2);
 
         // Unlink revokes remotely and clears local state.
         const unlink = await post("unlink");

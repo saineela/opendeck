@@ -2308,9 +2308,13 @@ export class YouTubeMusicDataSource extends DataSource {
     }
   }
 
-  async signIn(onPrompt: (prompt: AuthPrompt) => void): Promise<void> {
-    logInternalInfo("YouTubeMusicDataSource.signIn start");
-    this.signedIn = false;
+  async signIn(
+    onPrompt: (prompt: AuthPrompt) => void,
+    options: { reauthorize?: boolean } = {},
+  ): Promise<void> {
+    logInternalInfo("YouTubeMusicDataSource.signIn start", {
+      reauthorize: options.reauthorize === true,
+    });
 
     // Step 1: the OpenDeck account session gates the whole app (/login),
     // so an unauthenticated caller here is a programming error, not a
@@ -2321,15 +2325,26 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     // Step 2: link the YouTube Music account via Google's device-code flow.
-    const current = await getYouTubeLinkStatus();
-    if (current.linked) {
+    const current = await getYouTubeLinkStatus().catch((error: unknown) => {
+      this.signedIn = false;
+      throw error;
+    });
+    // Preserve the existing session while an optional token refresh is pending.
+    this.signedIn = current.linked;
+    if (current.linked && !options.reauthorize) {
       this.signedIn = true;
       await this.getMusicClient();
       logInternalInfo("YouTubeMusicDataSource.signIn already linked");
       return;
     }
 
-    const started = await startYouTubeLink();
+    let started: Awaited<ReturnType<typeof startYouTubeLink>>;
+    try {
+      started = await startYouTubeLink({ reauthorize: options.reauthorize });
+    } catch (error) {
+      if (!current.linked) this.signedIn = false;
+      throw error;
+    }
     const expiresInSec = started.expiresInSec ?? 300;
     onPrompt({
       verificationUrl: started.verificationUrl || "https://www.youtube.com/activate",
@@ -2340,8 +2355,14 @@ export class YouTubeMusicDataSource extends DataSource {
     const deadline = Date.now() + (expiresInSec + 45) * 1000;
     while (Date.now() < deadline) {
       await new Promise((resolve) => globalThis.setTimeout(resolve, 2_000));
-      const status = await getYouTubeLinkStatus();
-      if (status.linked) {
+      let status: Awaited<ReturnType<typeof getYouTubeLinkStatus>>;
+      try {
+        status = await getYouTubeLinkStatus();
+      } catch (error) {
+        if (!current.linked) this.signedIn = false;
+        throw error;
+      }
+      if (status.state === "linked" && status.linked) {
         try {
           await clearCache();
         } catch (error) {
@@ -2356,14 +2377,17 @@ export class YouTubeMusicDataSource extends DataSource {
         logInternalInfo("YouTubeMusicDataSource.signIn success");
         return;
       }
-      if (status.state === "error") {
+      if (status.state === "error" || (options.reauthorize && status.state === "linked" && !status.linked)) {
+        if (!current.linked) this.signedIn = false;
         throw new Error(status.error ?? "YouTube Music sign-in failed.");
       }
       if (status.state === "idle") {
+        if (!current.linked) this.signedIn = false;
         throw new Error("YouTube Music sign-in was cancelled.");
       }
     }
     await cancelYouTubeLink().catch(() => undefined);
+    if (!current.linked) this.signedIn = false;
     throw new Error("YouTube Music sign-in timed out.");
   }
 

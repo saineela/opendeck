@@ -326,11 +326,14 @@ export interface YouTubeLinkStatus {
   error?: string;
 }
 
-async function postYouTube(path: string): Promise<YouTubeLinkStatus> {
+async function postYouTube(
+  path: string,
+  payload: Record<string, unknown> = {},
+): Promise<YouTubeLinkStatus> {
   const response = await fetch(`/api/youtube/${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(payload),
     credentials: "same-origin",
   });
   if (!response.ok) {
@@ -353,8 +356,8 @@ export async function getYouTubeLinkStatus(): Promise<YouTubeLinkStatus> {
   return (await response.json()) as YouTubeLinkStatus;
 }
 
-export function startYouTubeLink(): Promise<YouTubeLinkStatus> {
-  return postYouTube("link");
+export function startYouTubeLink(options: { reauthorize?: boolean } = {}): Promise<YouTubeLinkStatus> {
+  return postYouTube("link", options);
 }
 
 /**

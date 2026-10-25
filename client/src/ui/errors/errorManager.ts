@@ -17,10 +17,15 @@ export interface AppErrorNotification {
   title: string;
   message: string;
   createdAt: number;
+  action?: {
+    label: string;
+    run: () => void | Promise<void>;
+  };
 }
 
 interface ReportErrorOptions {
   title?: string;
+  action?: AppErrorNotification["action"];
 }
 
 type Listener = () => void;
@@ -66,6 +71,7 @@ class AppErrorManager {
       title: options.title ?? "Error",
       message,
       createdAt: Date.now(),
+      action: options.action,
     };
     this.nextId += 1;
     this.notifications = [notification, ...this.notifications];
