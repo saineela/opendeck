@@ -8,6 +8,7 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { fetchAllowlisted } from "../services/safeFetch.js";
 import { recordPlay } from "../services/playHistory.js";
 import { resolveYouTubePlayback } from "../services/youtubePlayback.js";
+import { diagnosePot } from "../services/poTokenProvider.js";
 import { logger } from "../logger.js";
 
 /**
@@ -212,6 +213,14 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
 
     res.setHeader("cache-control", "no-store");
     res.json(resolution.playback);
+  });
+
+  // Playback diagnostics: reports whether the PO token provider is reachable
+  // and minting. It never returns the token itself.
+  router.get("/pot-check", limiter, requireAuth, async (req: Request, res: Response) => {
+    const videoId = typeof req.query.videoId === "string" ? req.query.videoId : "bG_NI-cCxDs";
+    const client = typeof req.query.client === "string" ? req.query.client : "web";
+    res.json(await diagnosePot(videoId, client));
   });
 
   router.get("/stream", limiter, async (req: Request, res: Response) => {

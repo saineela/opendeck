@@ -76,6 +76,41 @@ export async function getGvsToken(videoId: string, client = "web"): Promise<stri
   }
 }
 
+/** Reports why a token is or is not available, for /api/media/pot-check. */
+export async function diagnosePot(
+  videoId: string,
+  client = "web",
+): Promise<Record<string, unknown>> {
+  const base = potProviderUrl();
+  if (!base) return { configured: false };
+  try {
+    const response = await fetch(`${base}/get_pot`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content_binding: videoId, client }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    const text = await response.text();
+    let tokenLength = 0;
+    try {
+      const parsed = JSON.parse(text) as { poToken?: string; po_token?: string };
+      tokenLength = (parsed.poToken ?? parsed.po_token ?? "").length;
+    } catch {
+      // Report the raw body instead.
+    }
+    return {
+      configured: true,
+      base,
+      client,
+      status: response.status,
+      tokenLength,
+      body: tokenLength ? undefined : text.slice(0, 300),
+    };
+  } catch (error) {
+    return { configured: true, base, client, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Adds the token to a googlevideo url when one is available. */
 export function attachPot(url: string, token: string | undefined): string {
   if (!token) return url;
