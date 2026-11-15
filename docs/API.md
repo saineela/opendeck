@@ -35,7 +35,7 @@ oversized one returns **413** `{"error":"Request body too large."}`.
 
 ### Error envelope
 
-Every error is a JSON object with a single human-readable field:
+Every error is a JSON object with a human-readable `error` field. Routes that need authentication also return a machine-readable `code` — `sign_in_required` (no credential at all), `invalid_api_key` (a key was sent but this server does not know it), `key_prefix_only` (the 12-character prefix was sent instead of the key), `session_expired` (the `od_sid` cookie is no longer valid) or `session_required` (an API key was used on a cookie-only route):
 
 ```json
 { "error": "Sign in is required." }
@@ -1066,6 +1066,34 @@ Rules: `key` must be a non-empty string ≤ 256 chars (400 otherwise);
 
 ---
 
+### 2.10a Token exchange for headless clients — `POST /api/auth/token`
+
+A Worker, script, or server-side BFF cannot keep a session cookie: `fetch` in
+those runtimes discards `Set-Cookie`, so every follow-up call — including
+`GET /api/auth/whoami` — arrives anonymous and the API answers **401**
+`{"error":"Sign in is required."}`. Exchange the credentials `/api/auth/login`
+accepts for a long-lived key instead:
+
+```json
+{ "email": "you@example.com", "password": "…", "totpCode": "123456", "label": "worker" }
+```
+
+**201** `{id, label, key, keyPrefix, createdAt, user}` — `key` is the plaintext
+`odk_…` and is returned **once**. Store it and send `Authorization: Bearer odk_…`
+on every authenticated route. The key appears in **Settings → API** like any
+other key (same 25-per-account limit) and is revoked the same way. No cookie is
+set by this endpoint.
+
+| Case | Response |
+|---|---|
+| Account has TOTP enrolled and no `totpCode` | **401** `{"status":"totp_required","code":"totp_required"}` — resend with a 6-digit code or backup code |
+| Wrong email/password, or Google-only account | **401** `{"error":"Invalid email or password."}` and counts toward the same 10-attempt lockout as `/login` |
+| Account locked | **429** with `Retry-After` |
+| 25 keys already exist | **429** |
+| `PASSWORD_LOGIN_ENABLED=false` | **403** |
+
+Rate-limited like `/login` (10/min/IP).
+
 ### 2.10 API keys — `/api/keys`
 
 Per-account bearer tokens for scripted access, created in **Settings → API**
@@ -1077,7 +1105,11 @@ can neither list nor mint keys. Rate limits: 60/min for list and revoke,
 
 Send a key as `Authorization: Bearer odk_…`; it authenticates as your
 account on every **session** route below, except `/api/keys` and the TOTP
-setup/enable/disable routes (cookie only).
+setup/enable/disable routes (cookie only). `Authorization: odk_…` (no
+`Bearer`) and `X-API-Key: odk_…` are accepted as well. Sending the key's
+12-character `keyPrefix` instead of the key returns **401**
+`{"code":"key_prefix_only"}` — the full key is shown only once, at creation
+(§2.10).
 
 | Route | Body | Response |
 |---|---|---|

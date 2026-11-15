@@ -19,6 +19,16 @@ export interface AuthedUser {
 /** How the current request authenticated: a cookie session or an API key. */
 export type AuthVia = "session" | "api-key";
 
+/**
+ * Why a request that *did* present credentials is still unauthenticated.
+ *
+ * Without this, every failure looked like "Sign in is required." — including
+ * a perfectly good key sent the wrong way, or the 12-character prefix the
+ * Settings list displays instead of the key itself. Clients (and the people
+ * debugging them) could not tell the two apart from being signed out.
+ */
+export type AuthFailure = "invalid-api-key" | "key-prefix-only" | "expired-session";
+
 interface SessionRow {
   id: string;
   user_id: string;
@@ -38,6 +48,8 @@ declare global {
       authVia?: AuthVia | null;
       /** Set when authVia === "api-key": the key that authenticated this request. */
       apiKeyId?: string | null;
+      /** Set when credentials were presented but could not be resolved. */
+      authFailure?: AuthFailure | null;
     }
   }
 }
@@ -105,9 +117,9 @@ export function loadSession(db: Db, sessionId: string): AuthedUser | null {
   }
 
   if (now - row.last_seen_at > TOUCH_INTERVAL_MS || row.expires_at - now < EXTEND_AFTER_MS) {
-    db.prepare("UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?").run(
-      now,
+    db.prepare("UPDATE sessions SET expires_at = ?, last_seen_at = ? WHERE id = ?").run(
       now + SESSION_TTL_MS,
+      now,
       sessionId,
     );
   }
@@ -142,7 +154,8 @@ function loadApiKeyUser(
         key_id: string;
         last_used_at: number | null;
       }
-    | undefined;  if (!row) return null;
+    | undefined;
+  if (!row) return null;
 
   const now = Date.now();
   if (!row.last_used_at || now - row.last_used_at > 60_000) {
@@ -154,11 +167,38 @@ function loadApiKeyUser(
   };
 }
 
-function bearerApiKey(req: Request): string | null {
+/**
+ * True when the presented value is the display prefix of a stored key rather
+ * than a key. Settings only ever shows `keyPrefix` after creation, so pasting
+ * that 12-character string — sometimes with the rendered ellipsis — is the
+ * easiest copy to make by mistake.
+ */
+function isKeyPrefix(db: Db, presented: string): boolean {
+  if (!presented.startsWith("odk_") || presented.length > 24) return false;
+  const row = db
+    .prepare("SELECT 1 AS hit FROM api_keys WHERE key_prefix = ?")
+    .get(presented.slice(0, 12));
+  return Boolean(row);
+}
+
+/**
+ * The API key a client presented. `Authorization: Bearer odk_…` is the
+ * documented form; a bare `Authorization: odk_…` and the `X-API-Key` header
+ * are accepted as well, because a valid key in the wrong wrapper used to be
+ * indistinguishable from being signed out.
+ */
+function presentedApiKey(req: Request): string | null {
   const header = req.headers.authorization;
-  if (typeof header !== "string") return null;
-  const match = /^Bearer\s+(\S+)$/.exec(header.trim());
-  return match ? match[1] : null;
+  if (typeof header === "string") {
+    const value = header.trim();
+    const bearer = /^Bearer\s+(\S+)$/i.exec(value);
+    if (bearer) return bearer[1];
+    if (value.startsWith("odk_")) return value;
+  }
+  const explicitHeader = req.headers["x-api-key"];
+  const explicit = Array.isArray(explicitHeader) ? explicitHeader[0] : explicitHeader;
+  const trimmed = typeof explicit === "string" ? explicit.trim() : "";
+  return trimmed || null;
 }
 
 export function sessionMiddleware(db: Db): RequestHandler {
@@ -172,12 +212,24 @@ export function sessionMiddleware(db: Db): RequestHandler {
       next();
       return;
     }
-    const apiKey = bearerApiKey(req);
+    const apiKey = presentedApiKey(req);
     const keyAuth = apiKey ? loadApiKeyUser(db, apiKey) : null;
     req.authUser = keyAuth?.user ?? null;
     req.sessionUserId = keyAuth?.user.id ?? null;
     req.authVia = keyAuth ? "api-key" : null;
     req.apiKeyId = keyAuth?.keyId ?? null;
+    req.authFailure = null;
+    if (!keyAuth && apiKey) {
+      // Name the actual problem: a key that is only a prefix, or one this
+      // server does not know (wrong instance, revoked, or already rotated).
+      req.authFailure = isKeyPrefix(db, apiKey) ? "key-prefix-only" : "invalid-api-key";
+      logger.warn("auth.apiKeyRejected", {
+        prefix: apiKey.slice(0, 12),
+        reason: req.authFailure,
+      });
+    } else if (!keyAuth && sessionId) {
+      req.authFailure = "expired-session";
+    }
     if (keyAuth) {
       res.once("finish", () => {
         try {
@@ -207,11 +259,34 @@ export function sessionMiddleware(db: Db): RequestHandler {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (!req.authUser) {
-    res.status(401).json({ error: "Sign in is required." });
+  if (req.authUser) {
+    next();
     return;
   }
-  next();
+  if (req.authFailure === "key-prefix-only") {
+    res.status(401).json({
+      code: "key_prefix_only",
+      error:
+        "That is an API key's prefix, not the key itself. A full key is shown only once, when it is created — create a new key in Settings → API and use the whole value.",
+    });
+    return;
+  }
+  if (req.authFailure === "invalid-api-key") {
+    res.status(401).json({
+      code: "invalid_api_key",
+      error:
+        "That API key was not recognized. Send the full key as `Authorization: Bearer odk_…` (or `X-API-Key: odk_…`) and check that it was created on this server.",
+    });
+    return;
+  }
+  if (req.authFailure === "expired-session") {
+    res.status(401).json({
+      code: "session_expired",
+      error: "Your session has expired. Sign in again.",
+    });
+    return;
+  }
+  res.status(401).json({ code: "sign_in_required", error: "Sign in is required." });
 }
 
 /**
@@ -221,7 +296,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
  */
 export function requireSession(req: Request, res: Response, next: NextFunction): void {
   if (!req.authUser || req.authVia !== "session") {
-    res.status(401).json({ error: "A signed-in browser session is required." });
+    res.status(401).json({
+      code: "session_required",
+      error:
+        req.authVia === "api-key"
+          ? "This endpoint needs a signed-in browser session; an API key cannot be used here."
+          : "A signed-in browser session is required.",
+    });
     return;
   }
   next();

@@ -227,6 +227,44 @@ describe("DELETE /api/keys/:id", () => {
   });
 });
 
+describe("POST /api/auth/token", () => {
+  async function registerAccount(): Promise<{ email: string; password: string }> {
+    const account = { email: `token-${crypto.randomUUID()}@example.com`, password: "password123" };
+    const res = await call("POST", "/api/auth/register", { body: account });
+    expect(res.status).toBe(201);
+    return account;
+  }
+
+  it("trades a password for a key that authenticates without any cookie", async () => {
+    const account = await registerAccount();
+    const res = await call("POST", "/api/auth/token", {
+      body: { ...account, label: "worker" },
+    });
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as { key: string; keyPrefix: string; label: string };
+    expect(payload.key).toMatch(/^odk_[A-Za-z0-9_-]{43}$/);
+    expect(payload.keyPrefix).toBe(payload.key.slice(0, 12));
+    expect(payload.label).toBe("worker");
+
+    // What the headless client does next: no cookie, only the key.
+    const who = await call("GET", "/api/auth/whoami", { bearer: payload.key });
+    expect(who.status).toBe(200);
+    expect((await who.json()) as { authenticated: boolean }).toMatchObject({
+      authenticated: true,
+      user: { email: account.email },
+    });
+  });
+
+  it("rejects a wrong password without minting anything", async () => {
+    const account = await registerAccount();
+    const res = await call("POST", "/api/auth/token", {
+      body: { email: account.email, password: "not-the-password" },
+    });
+    expect(res.status).toBe(401);
+    expect(await res.text()).not.toContain("odk_");
+  });
+});
+
 describe("bearer authentication", () => {
   it("rejects a garbage or non-existent key", async () => {
     for (const bad of ["odk_not-a-real-key", "nonsense", ""]) {

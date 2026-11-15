@@ -1,10 +1,10 @@
-import crypto from "node:crypto";
 import express, { type Request, type Response, type Router } from "express";
 import type { Db } from "../db.js";
 import { requireSession } from "../middleware/session.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { getKeyPlayStats } from "../services/playHistory.js";
 import { logger } from "../logger.js";
+import { MAX_API_KEYS_PER_USER, countApiKeys, mintApiKey } from "../services/apiKeys.js";
 
 /**
  * Per-account API keys: long-lived bearer tokens (`Authorization: Bearer
@@ -61,32 +61,16 @@ export function createApiKeysRoutes(db: Db): Router {
       res.status(400).json({ error: "A label of 1-80 characters is required." });
       return;
     }
-    const existing = db
-      .prepare("SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ?")
-      .get(req.sessionUserId!) as { n: number };
-    if (existing.n >= 25) {
+    if (countApiKeys(db, req.sessionUserId!) >= MAX_API_KEYS_PER_USER) {
       res.status(429).json({ error: "API key limit reached (25). Revoke one first." });
       return;
     }
 
-    const key = `odk_${crypto.randomBytes(32).toString("base64url")}`;
-    const keyHash = crypto.createHash("sha256").update(key).digest("hex");
-    const id = crypto.randomUUID();
-    const now = Date.now();
-    db.prepare(
-      `INSERT INTO api_keys (id, user_id, label, key_hash, key_prefix, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(id, req.sessionUserId!, label.trim(), keyHash, key.slice(0, 12), now);
-    logger.info("apikeys.created", { userId: req.sessionUserId, keyId: id });
+    const minted = mintApiKey(db, req.sessionUserId!, label.trim());
+    logger.info("apikeys.created", { userId: req.sessionUserId, keyId: minted.id });
 
     // The only time the plaintext key leaves the server.
-    res.status(201).json({
-      id,
-      label: label.trim(),
-      key,
-      keyPrefix: key.slice(0, 12),
-      createdAt: now,
-    });
+    res.status(201).json(minted);
   });
 
   router.delete("/:id", requireSession, listLimit, (req: Request, res: Response) => {

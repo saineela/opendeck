@@ -441,12 +441,31 @@ export class AudioEngine {
         cleanup();
         resolve();
       };
-      const handleError = () => {
+      const handleError = async () => {
         cleanup();
         if (requestId === this.loadRequestId && this.currentVideoId === videoId) {
           this.currentVideoId = null;
         }
-        reject(new Error(`Unable to decode native audio (${audio.error?.code ?? "unknown"}).`));
+        const code = audio.error?.code ?? "unknown";
+        // A bare media error code hides the cause. On the relay path the server
+        // answers JSON when it cannot fetch the CDN bytes, so ask it once and
+        // surface its message instead of only "(4)".
+        let detail = "";
+        if (sourceUrl) {
+          try {
+            const probe = await fetch(sourceUrl, {
+              headers: { range: "bytes=0-1" },
+              credentials: "same-origin",
+            });
+            if (!probe.ok) {
+              const payload = (await probe.json().catch(() => null)) as { error?: string } | null;
+              if (payload?.error) detail = ` ${payload.error}`;
+            }
+          } catch {
+            // Keep the bare code when the relay itself is unreachable.
+          }
+        }
+        reject(new Error(`Unable to decode native audio (${code}).${detail}`));
       };
       audio.addEventListener("canplay", handleReady, { once: true });
       audio.addEventListener("error", handleError, { once: true });

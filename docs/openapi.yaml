@@ -179,6 +179,59 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
+  /api/auth/token:
+    post:
+      tags: [Auth]
+      operationId: createApiKeyFromPassword
+      summary: Exchange a password for a long-lived API key (headless clients)
+      description: |
+        For clients that cannot keep a session cookie — Workers, scripts,
+        server-side services — where `fetch` discards `Set-Cookie` and later
+        calls (such as `/api/auth/whoami`) arrive anonymous and answer 401
+        "Sign in is required." Returns the same `odk_…` key Settings → API
+        mints; store it and send `Authorization: Bearer odk_…`. No session
+        cookie is set. Rate limit 10/min/IP; wrong passwords count toward the
+        same 10-attempt lockout as `/api/auth/login`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                totpCode: { type: string, description: 6-digit TOTP code or a backup code — required only when the account has 2FA }
+                label: { type: string, maxLength: 80, description: Defaults to "api token" }
+      responses:
+        "201":
+          description: Key minted — the plaintext `key` is shown only here
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, label, key, keyPrefix, createdAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  label: { type: string }
+                  key: { type: string, description: Plaintext odk_… key, returned exactly once }
+                  keyPrefix: { type: string }
+                  createdAt: { type: integer }
+                  user: { $ref: "#/components/schemas/AuthUser" }
+        "401":
+          description: Wrong password or unknown email, or status totp_required when a 2FA code is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: Password sign-in disabled on this server
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
   /api/auth/login/totp:
     post:
       tags: [Auth]

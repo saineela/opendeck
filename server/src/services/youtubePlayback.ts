@@ -376,6 +376,30 @@ export interface PlaybackOptions {
   poToken?: string | null;
 }
 
+/**
+ * Asks googlevideo for the first byte of a resolved URL.
+ *
+ * `/player` happily returns a URL that googlevideo then refuses (403): the
+ * signature can be scoped to the resolve-time egress IP, the format can be
+ * gated, or the link can already be stale. Handing such a URL to the browser
+ * plays nothing and surfaces as `MEDIA_ERR_SRC_NOT_SUPPORTED` — an opaque
+ * "unable to decode native audio (4)" that says nothing about the real cause.
+ * Probing here lets the credential ladder move on to the next client instead.
+ */
+async function probeStreamUrl(url: string): Promise<{ ok: boolean; status: number | null }> {
+  try {
+    const response = await fetch(url, {
+      headers: { range: "bytes=0-1" },
+      signal: AbortSignal.timeout(8_000),
+    });
+    // Only the status matters; drop the body so the socket is released.
+    await response.body?.cancel().catch(() => undefined);
+    return { ok: response.ok, status: response.status };
+  } catch {
+    return { ok: false, status: null };
+  }
+}
+
 export async function resolveYouTubePlayback(
   db: Db,
   config: ServerConfig,
@@ -432,6 +456,68 @@ export async function resolveYouTubePlayback(
         quality,
       );
       if (selected?.url) {
+        const probe = await probeStreamUrl(selected.url);
+        if (!probe.ok) {
+          attempts.push({
+            credential,
+            client: spec.client,
+            playability: "URL_REJECTED",
+            reason: `googlevideo answered ${probe.status === null ? "a transport error" : `HTTP ${probe.status}`}.`,
+            audioFormats: attempt.audioFormats,
+            playableFormats: attempt.playableFormats,
+          });
+          logger.warn("youtube.playback url rejected", {
+            userId,
+            videoId,
+            credential,
+            client: spec.client,
+            itag: selected.itag ?? null,
+            status: probe.status,
+          });
+          // A refused link is usually link-specific (googlevideo rotates the
+          // signature), not client-specific, so ask /player once more for a
+          // fresh URL before giving up on this client.
+          const retry = await requestPlayer(spec, videoId, credentials);
+          const retrySelected = retry.payload
+            ? selectAudioFormat(
+                [
+                  ...(retry.payload.streamingData?.adaptiveFormats ?? []),
+                  ...(retry.payload.streamingData?.formats ?? []),
+                ],
+                quality,
+              )
+            : null;
+          if (retrySelected?.url) {
+            const retryProbe = await probeStreamUrl(retrySelected.url);
+            if (retryProbe.ok) {
+              logger.info("youtube.playback resolved on retry", {
+                userId,
+                videoId,
+                credential,
+                client: spec.client,
+                itag: retrySelected.itag ?? null,
+              });
+              return {
+                ok: true,
+                playback: {
+                  url: retrySelected.url,
+                  mimeType: retrySelected.mimeType ?? "audio/mp4",
+                  itag: retrySelected.itag ?? null,
+                  via: credential,
+                },
+              };
+            }
+            attempts.push({
+              credential,
+              client: spec.client,
+              playability: "URL_REJECTED",
+              reason: `googlevideo answered ${retryProbe.status === null ? "a transport error" : `HTTP ${retryProbe.status}`} for a second signature.`,
+              audioFormats: attempt.audioFormats,
+              playableFormats: attempt.playableFormats,
+            });
+          }
+          continue;
+        }
         logger.info("youtube.playback resolved", {
           userId,
           videoId,
@@ -477,6 +563,9 @@ export async function resolveYouTubePlayback(
   } else if (attempts.every((attempt) => attempt.playability === "TRANSPORT_ERROR")) {
     status = 502;
     reason = "YouTube did not respond to the playback request.";
+  } else if (attempts.some((attempt) => attempt.playability === "URL_REJECTED")) {
+    reason =
+      "YouTube resolved this track but refused to serve the audio. Reconnect the account from Settings → Playback sign-in, then play it again.";
   } else if (attempts.some((attempt) => attempt.playableFormats > 0) && !anyPlayableFormats) {
     reason = "YouTube returned ciphered audio the server cannot decode.";
   } else if (attempts.length === 0) {

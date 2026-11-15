@@ -277,6 +277,45 @@ describe("resolveYouTubePlayback", () => {
     }
   });
 
+  it("keeps looking when googlevideo refuses the resolved URL", async () => {
+    const userId = createUser();
+    let probes = 0;
+    stubPlayer((request) => {
+      if (request.url.includes("googlevideo.com")) {
+        probes += 1;
+        return new Response("denied", { status: 403 });
+      }
+      return new Response(JSON.stringify(playerResponse()), { status: 200 });
+    });
+
+    const result = await resolveYouTubePlayback(db, config, userId, VIDEO_ID);
+    // The first candidate's URL was refused, so the ladder had to try more.
+    expect(probes).toBeGreaterThan(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.attempts.some((attempt) => attempt.playability === "URL_REJECTED")).toBe(true);
+      expect(result.reason).toMatch(/Playback sign-in/);
+    }
+  });
+
+  it("returns a URL only once the CDN actually serves it", async () => {
+    const userId = createUser();
+    let probes = 0;
+    stubPlayer((request) => {
+      if (request.url.includes("googlevideo.com")) {
+        probes += 1;
+        return probes === 1
+          ? new Response("denied", { status: 403 })
+          : new Response("ok", { status: 206 });
+      }
+      return new Response(JSON.stringify(playerResponse()), { status: 200 });
+    });
+
+    const result = await resolveYouTubePlayback(db, config, userId, VIDEO_ID);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.playback.url).toBe(AUDIO_URL);
+  });
+
   it("surfaces an upstream rejection without leaking the token", async () => {
     const userId = createUser();
     linkOAuth(userId);

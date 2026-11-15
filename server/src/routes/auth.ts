@@ -46,6 +46,7 @@ import {
   verifyTotp,
 } from "../services/totp.js";
 import { logger } from "../logger.js";
+import { MAX_API_KEYS_PER_USER, countApiKeys, mintApiKey } from "../services/apiKeys.js";
 
 const OAUTH_COOKIE = "od_oauth";
 /**
@@ -431,6 +432,126 @@ export function createAuthRoutes(db: Db, config: ServerConfig): Router {
     startSession(res, account.id);
     logger.info("auth.login success", { userId: account.id });
     res.json({ status: "ok", user: { name: account.name, email: account.email, picture: account.picture } });
+  });
+
+  /**
+   * Exchanges a password for a long-lived API key — the sign-in path for
+   * clients that cannot hold a cookie.
+   *
+   * A Worker, script, or server-side BFF has nowhere to put `Set-Cookie`:
+   * `fetch` there discards it, so every follow-up request (including
+   * `/api/auth/whoami`) arrives anonymous and the API answers 401 "Sign in is
+   * required." — which looks exactly like having to sign in over and over.
+   * This mints the same `odk_…` key the browser flow creates in Settings → API,
+   * so the client can store one durable credential and send it as
+   * `Authorization: Bearer odk_…`. No session cookie is set here.
+   */
+  router.post("/token", loginLimit, async (req: Request, res: Response) => {
+    if (!config.passwordLoginEnabled) {
+      jsonError(res, 403, "Password sign-in is disabled on this server.");
+      return;
+    }
+    const email = normalizeEmail(req.body?.email);
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    const generic = () => jsonError(res, 401, "Invalid email or password.");
+    if (!email || !password) {
+      generic();
+      return;
+    }
+
+    const account = findAccountByEmail(email);
+    if (!account || account.auth_provider !== "password") {
+      await verifyPassword(password, null); // equalise timing
+      generic();
+      return;
+    }
+
+    const now = Date.now();
+    if (account.locked_until && account.locked_until > now) {
+      res.setHeader("Retry-After", String(Math.ceil((account.locked_until - now) / 1000)));
+      jsonError(res, 429, "Too many failed attempts. Try again later.");
+      return;
+    }
+
+    const ok = await verifyPassword(password, account.password_hash);
+    if (!ok) {
+      // Same lockout bookkeeping as /login: an unauthenticated endpoint that
+      // checks passwords must not be a cheaper brute-force target.
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const latest = db
+          .prepare("SELECT failed_logins FROM users WHERE id = ?")
+          .get(account.id) as { failed_logins: number } | undefined;
+        if (latest) {
+          const failed = latest.failed_logins + 1;
+          const lockedUntil = failed >= MAX_FAILED_LOGINS ? Date.now() + LOCK_DURATION_MS : null;
+          db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(
+            failed,
+            lockedUntil,
+            account.id,
+          );
+        }
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      generic();
+      return;
+    }
+
+    if (account.totp_enabled === 1 && account.totp_secret) {
+      const submitted = typeof req.body?.totpCode === "string" ? req.body.totpCode.trim() : "";
+      if (!submitted) {
+        res.status(401).json({
+          status: "totp_required",
+          code: "totp_required",
+          error:
+            "Two-step verification is enabled on this account: resend with totpCode (a 6-digit code or a backup code).",
+        });
+        return;
+      }
+      const usingBackup = !/^\d{6}$/.test(submitted.replace(/\s+/g, ""));
+      const storedCodes = JSON.parse(account.totp_backup_codes || "[]") as string[];
+      const remainingBackupCodes = usingBackup ? consumeBackupCode(storedCodes, submitted) : null;
+      const passed = usingBackup
+        ? remainingBackupCodes !== null
+        : verifyTotp(account.totp_secret, submitted);
+      if (!passed) {
+        jsonError(res, 401, "Invalid or expired code.");
+        return;
+      }
+      if (usingBackup) {
+        db.prepare("UPDATE users SET totp_backup_codes = ? WHERE id = ?").run(
+          JSON.stringify(remainingBackupCodes ?? storedCodes),
+          account.id,
+        );
+      }
+    }
+
+    if (countApiKeys(db, account.id) >= MAX_API_KEYS_PER_USER) {
+      jsonError(
+        res,
+        429,
+        `API key limit reached (${MAX_API_KEYS_PER_USER}). Revoke one in Settings → API first.`,
+      );
+      return;
+    }
+
+    const rawLabel = req.body?.label;
+    const label =
+      typeof rawLabel === "string" && rawLabel.trim()
+        ? rawLabel.trim().slice(0, 80)
+        : "api token";
+    db.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?").run(
+      account.id,
+    );
+    const minted = mintApiKey(db, account.id, label);
+    logger.info("auth.token success", { userId: account.id, keyId: minted.id });
+    res.status(201).json({
+      ...minted,
+      user: { name: account.name, email: account.email, picture: account.picture },
+    });
   });
 
   /** Step 2: completes a password sign-in that requires a TOTP code. */
