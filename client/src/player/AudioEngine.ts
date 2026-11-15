@@ -453,8 +453,11 @@ export class AudioEngine {
         let detail = "";
         if (sourceUrl) {
           try {
+            // Ask the way the element did (open-ended): a bounded probe can
+            // succeed against a relay that is failing the real request, which
+            // is exactly how this surfaced as a bare "(4)".
             const probe = await fetch(sourceUrl, {
-              headers: { range: "bytes=0-1" },
+              headers: { range: "bytes=0-" },
               credentials: "same-origin",
             });
             if (!probe.ok) {

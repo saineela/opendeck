@@ -18,6 +18,39 @@ import { logger } from "../logger.js";
  * Only googlevideo CDN `videoplayback` URLs are accepted.
  */
 
+/**
+ * Bytes asked of googlevideo when the player's range is open-ended.
+ *
+ * googlevideo refuses an open-ended (`bytes=0-`) or absent range on many
+ * signed URLs with a bare 403 while serving the same URL for a bounded range
+ * (measured on a live itag=140 URL: 8/8 403 open-ended, 8/8 206 bounded). An
+ * `<audio>` element always opens with `bytes=0-`, so forwarding it verbatim
+ * made the relay answer 502 and the element failed with
+ * MEDIA_ERR_SRC_NOT_SUPPORTED before it could ask again. Asking for a bounded
+ * chunk keeps the response streamable and lets the player follow up with its
+ * own ranges.
+ */
+const UPSTREAM_CHUNK_BYTES = 1 << 20;
+
+/** Bounds an open-ended or absent range; leaves bounded ranges untouched. */
+export function boundUpstreamRange(raw: string | undefined): string {
+  const lastByte = UPSTREAM_CHUNK_BYTES - 1;
+  if (!raw) return `bytes=0-${lastByte}`;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(raw.trim());
+  if (!match) return raw;
+  const startRaw = match[1] ?? "";
+  const endRaw = match[2] ?? "";
+  // Suffix ranges ("bytes=-500") are already bounded.
+  if (startRaw === "") return raw;
+  const start = Number(startRaw);
+  if (!Number.isSafeInteger(start) || start < 0) return raw;
+  if (endRaw !== "") {
+    const end = Number(endRaw);
+    return Number.isSafeInteger(end) && end >= start ? raw : `bytes=${start}-${start + lastByte}`;
+  }
+  return `bytes=${start}-${start + lastByte}`;
+}
+
 const PASSTHROUGH_HEADERS = [
   "content-type",
   "content-length",
@@ -153,9 +186,7 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
           : "Mozilla/5.0",
     };
     const range = req.headers.range;
-    if (typeof range === "string") {
-      upstreamHeaders.range = range;
-    }
+    upstreamHeaders.range = boundUpstreamRange(typeof range === "string" ? range : undefined);
 
     let upstream: globalThis.Response;
     try {
