@@ -10,6 +10,12 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { openDatabase, type Db } from "./db.js";
 import { SESSION_COOKIE, createSession } from "./middleware/session.js";
+import {
+  generateBackupCodes,
+  generateTotpCode,
+  generateTotpSecret,
+  hashBackupCodes,
+} from "./services/totp.js";
 
 /**
  * Per-account API keys.
@@ -262,6 +268,64 @@ describe("POST /api/auth/token", () => {
     });
     expect(res.status).toBe(401);
     expect(await res.text()).not.toContain("odk_");
+  });
+});
+
+describe("POST /api/auth/token with two-step verification", () => {
+  async function registerTwoFactorAccount(): Promise<{
+    email: string;
+    password: string;
+    secret: string;
+    backupCode: string;
+  }> {
+    const account = {
+      email: `token-2fa-${crypto.randomUUID()}@example.com`,
+      password: "password123",
+    };
+    const res = await call("POST", "/api/auth/register", { body: account });
+    expect(res.status).toBe(201);
+    const secret = generateTotpSecret();
+    const backupCodes = generateBackupCodes(2);
+    harness.db
+      .prepare(
+        "UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_backup_codes = ? WHERE email = ?",
+      )
+      .run(secret, JSON.stringify(hashBackupCodes(backupCodes)), account.email);
+    return { ...account, secret, backupCode: backupCodes[0]! };
+  }
+
+  it("asks for the second factor instead of handing out a key", async () => {
+    const account = await registerTwoFactorAccount();
+    const res = await call("POST", "/api/auth/token", {
+      body: { email: account.email, password: account.password },
+    });
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(body).toContain("totp_required");
+    expect(body).not.toContain("odk_");
+  });
+
+  it("mints a key for a valid TOTP code", async () => {
+    const account = await registerTwoFactorAccount();
+    const code = generateTotpCode(account.secret);
+    expect(code).not.toBeNull();
+    const res = await call("POST", "/api/auth/token", {
+      body: { email: account.email, password: account.password, totpCode: code! },
+    });
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as { key: string };
+    const who = await call("GET", "/api/auth/whoami", { bearer: payload.key });
+    expect(who.status).toBe(200);
+  });
+
+  it("accepts a backup code once and rejects the replay", async () => {
+    const account = await registerTwoFactorAccount();
+    const body = { email: account.email, password: account.password, totpCode: account.backupCode };
+    const first = await call("POST", "/api/auth/token", { body });
+    expect(first.status).toBe(201);
+
+    const replay = await call("POST", "/api/auth/token", { body });
+    expect(replay.status).toBe(401);
   });
 });
 

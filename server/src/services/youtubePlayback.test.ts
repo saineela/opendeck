@@ -316,6 +316,28 @@ describe("resolveYouTubePlayback", () => {
     if (result.ok) expect(result.playback.url).toBe(AUDIO_URL);
   });
 
+  it("stops probing once the budget is spent instead of stalling playback", async () => {
+    const userId = createUser();
+    let cdnProbes = 0;
+    stubPlayer((request) => {
+      if (request.url.includes("googlevideo.com")) {
+        cdnProbes += 1;
+        return new Response("denied", { status: 403 });
+      }
+      return new Response(JSON.stringify(playerResponse()), { status: 200 });
+    });
+
+    const startedAt = Date.now();
+    const result = await resolveYouTubePlayback(db, config, userId, VIDEO_ID, "normal", {
+      probeBudgetMs: 0,
+    });
+    // No CDN round trip at all, and the URL is handed over for the client to try.
+    expect(cdnProbes).toBe(0);
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.playback.url).toBe(AUDIO_URL);
+  });
+
   it("surfaces an upstream rejection without leaking the token", async () => {
     const userId = createUser();
     linkOAuth(userId);

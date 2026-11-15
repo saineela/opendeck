@@ -374,6 +374,8 @@ export interface PlaybackOptions {
    * strips it), so it travels with this request instead.
    */
   poToken?: string | null;
+  /** Overrides the total probe budget (tests use a tiny one). */
+  probeBudgetMs?: number;
 }
 
 /**
@@ -386,17 +388,27 @@ export interface PlaybackOptions {
  * "unable to decode native audio (4)" that says nothing about the real cause.
  * Probing here lets the credential ladder move on to the next client instead.
  */
-async function probeStreamUrl(url: string): Promise<{ ok: boolean; status: number | null }> {
+/** Total time one resolve may spend probing CDN URLs. */
+const PROBE_BUDGET_MS = 5_000;
+/** Longest single probe, even when the shared budget is larger. */
+const PROBE_TIMEOUT_MS = 8_000;
+
+async function probeStreamUrl(
+  url: string,
+  deadline: number,
+): Promise<{ ok: boolean; status: number | null; skipped: boolean }> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return { ok: false, status: null, skipped: true };
   try {
     const response = await fetch(url, {
       headers: { range: "bytes=0-1" },
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(Math.min(PROBE_TIMEOUT_MS, remaining)),
     });
     // Only the status matters; drop the body so the socket is released.
     await response.body?.cancel().catch(() => undefined);
-    return { ok: response.ok, status: response.status };
+    return { ok: response.ok, status: response.status, skipped: false };
   } catch {
-    return { ok: false, status: null };
+    return { ok: false, status: null, skipped: false };
   }
 }
 
@@ -420,6 +432,10 @@ export async function resolveYouTubePlayback(
     visitorData,
     poToken: options.poToken && options.poToken.length <= 4096 ? options.poToken : null,
   };
+
+  // Probing is best-effort and time-boxed: a slow or dead CDN must not keep
+  // the player waiting on a resolve it is about to abandon anyway.
+  const probeDeadline = Date.now() + (options.probeBudgetMs ?? PROBE_BUDGET_MS);
 
   const credentialsToTry: PlaybackCredential[] = [];
   if (cookieHeader) credentialsToTry.push("cookies");
@@ -456,7 +472,27 @@ export async function resolveYouTubePlayback(
         quality,
       );
       if (selected?.url) {
-        const probe = await probeStreamUrl(selected.url);
+        const probe = await probeStreamUrl(selected.url, probeDeadline);
+        if (probe.skipped) {
+          // The budget is spent. Hand the URL over unverified rather than stall
+          // playback: a dead link now reports the relay's error on the client.
+          logger.warn("youtube.playback probe skipped", {
+            userId,
+            videoId,
+            credential,
+            client: spec.client,
+            itag: selected.itag ?? null,
+          });
+          return {
+            ok: true,
+            playback: {
+              url: selected.url,
+              mimeType: selected.mimeType ?? "audio/mp4",
+              itag: selected.itag ?? null,
+              via: credential,
+            },
+          };
+        }
         if (!probe.ok) {
           attempts.push({
             credential,
@@ -477,8 +513,9 @@ export async function resolveYouTubePlayback(
           // A refused link is usually link-specific (googlevideo rotates the
           // signature), not client-specific, so ask /player once more for a
           // fresh URL before giving up on this client.
-          const retry = await requestPlayer(spec, videoId, credentials);
-          const retrySelected = retry.payload
+          const retry =
+            Date.now() < probeDeadline ? await requestPlayer(spec, videoId, credentials) : null;
+          const retrySelected = retry?.payload
             ? selectAudioFormat(
                 [
                   ...(retry.payload.streamingData?.adaptiveFormats ?? []),
@@ -488,8 +525,8 @@ export async function resolveYouTubePlayback(
               )
             : null;
           if (retrySelected?.url) {
-            const retryProbe = await probeStreamUrl(retrySelected.url);
-            if (retryProbe.ok) {
+            const retryProbe = await probeStreamUrl(retrySelected.url, probeDeadline);
+            if (retryProbe.ok || retryProbe.skipped) {
               logger.info("youtube.playback resolved on retry", {
                 userId,
                 videoId,
