@@ -8,7 +8,7 @@ import { rateLimit } from "../middleware/rateLimit.js";
 import { fetchAllowlisted } from "../services/safeFetch.js";
 import { recordPlay } from "../services/playHistory.js";
 import { resolveYouTubePlayback } from "../services/youtubePlayback.js";
-import { diagnosePot } from "../services/poTokenProvider.js";
+import { diagnosePot, getGvsToken, providerClientFor } from "../services/poTokenProvider.js";
 import { logger } from "../logger.js";
 
 /**
@@ -236,6 +236,17 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
           ? req.headers["user-agent"]
           : "Mozilla/5.0",
     };
+    // Attach the proof-of-origin token here as well: the relay is the one place
+    // every playback request passes through, so a token that resolve failed to
+    // add still gets a chance before googlevideo refuses the tail.
+    if (!url.searchParams.get("pot")) {
+      const videoId = typeof req.query.videoId === "string" ? req.query.videoId : "";
+      if (videoId) {
+        const token = await getGvsToken(videoId, providerClientFor(url.searchParams.get("c") ?? "web"));
+        if (token) url.searchParams.set("pot", token);
+      }
+    }
+
     // `clen` is the exact file length the player declared for this signature.
     // Some videos are only served up to a point, so ask for no more than the
     // CDN will hand over and describe the resource with that shorter length.
