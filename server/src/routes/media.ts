@@ -239,13 +239,20 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
     // Attach the proof-of-origin token here as well: the relay is the one place
     // every playback request passes through, so a token that resolve failed to
     // add still gets a chance before googlevideo refuses the tail.
+    // `x-odk-pot` reports what the relay did, because "the tail is refused"
+    // cannot distinguish a missing token from a rejected one.
+    let potState = url.searchParams.get("pot") ? "present" : "absent";
     if (!url.searchParams.get("pot")) {
       const videoId = typeof req.query.videoId === "string" ? req.query.videoId : "";
       if (videoId) {
         const token = await getGvsToken(videoId, providerClientFor(url.searchParams.get("c") ?? "web"));
-        if (token) url.searchParams.set("pot", token);
+        if (token) {
+          url.searchParams.set("pot", token);
+          potState = "minted";
+        }
       }
     }
+    res.setHeader("x-odk-pot", potState);
 
     // `clen` is the exact file length the player declared for this signature.
     // Some videos are only served up to a point, so ask for no more than the
