@@ -3,6 +3,7 @@ import type { ServerConfig } from "../config.js";
 import { getValidAccessToken } from "./youtubeAccount.js";
 import { buildYouTubeCookieHeaders, loadYouTubeCookies } from "./youtubeCookies.js";
 import { logger } from "../logger.js";
+import { attachPot, getGvsToken, providerClientFor } from "./poTokenProvider.js";
 
 /**
  * Playback URL resolution for YouTube Music.
@@ -472,7 +473,13 @@ export async function resolveYouTubePlayback(
         quality,
       );
       if (selected?.url) {
-        const probe = await probeStreamUrl(selected.url, probeDeadline);
+        // A GVS token is what makes googlevideo serve a gated track past its
+        // first megabyte; probing tests the secured url, not the bare one.
+        const securedUrl = attachPot(
+          selected.url,
+          await getGvsToken(videoId, providerClientFor(spec.client)),
+        );
+        const probe = await probeStreamUrl(securedUrl, probeDeadline);
         if (probe.skipped) {
           // The budget is spent. Hand the URL over unverified rather than stall
           // playback: a dead link now reports the relay's error on the client.
@@ -486,7 +493,7 @@ export async function resolveYouTubePlayback(
           return {
             ok: true,
             playback: {
-              url: selected.url,
+              url: securedUrl,
               mimeType: selected.mimeType ?? "audio/mp4",
               itag: selected.itag ?? null,
               via: credential,
@@ -525,7 +532,11 @@ export async function resolveYouTubePlayback(
               )
             : null;
           if (retrySelected?.url) {
-            const retryProbe = await probeStreamUrl(retrySelected.url, probeDeadline);
+            const retryUrl = attachPot(
+              retrySelected.url,
+              await getGvsToken(videoId, providerClientFor(spec.client)),
+            );
+            const retryProbe = await probeStreamUrl(retryUrl, probeDeadline);
             if (retryProbe.ok || retryProbe.skipped) {
               logger.info("youtube.playback resolved on retry", {
                 userId,
@@ -537,7 +548,7 @@ export async function resolveYouTubePlayback(
               return {
                 ok: true,
                 playback: {
-                  url: retrySelected.url,
+                  url: retryUrl,
                   mimeType: retrySelected.mimeType ?? "audio/mp4",
                   itag: retrySelected.itag ?? null,
                   via: credential,
