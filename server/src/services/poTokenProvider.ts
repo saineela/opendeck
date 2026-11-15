@@ -42,6 +42,20 @@ export function potProviderBases(): string[] {
   return bases.filter((base, index) => base && bases.indexOf(base) === index);
 }
 
+/**
+ * googlevideo checks a token against the client whose URL carries it, so the
+ * provider has to mint for the client the format came from.
+ */
+export function providerClientFor(client: string): string {
+  const name = client.toUpperCase();
+  if (name.startsWith("IOS")) return "ios";
+  if (name.startsWith("ANDROID_VR")) return "android_vr";
+  if (name.startsWith("ANDROID")) return "android";
+  if (name.startsWith("TV")) return "tv";
+  if (name.startsWith("MWEB")) return "mweb";
+  return "web";
+}
+
 export async function getGvsToken(videoId: string, client = "web"): Promise<string | undefined> {
   if (Date.now() < unavailableUntil) return undefined;
 
