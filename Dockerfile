@@ -2,8 +2,9 @@
 # ============================================================================
 # OpenDeck — self-hosted music client
 #
-# Multi-stage build: compile the React client + TypeScript server, then ship a
-# slim runtime image that serves both from a single process on :4000.
+# Multi-stage build: compile the React client + TypeScript server, bundle the
+# PO token provider, then ship a slim runtime image that serves both from a
+# single process on :4000.
 #
 #   docker build -t opendeck .
 #   docker run -p 4000:4000 -e APP_SECRET=$(openssl rand -hex 32) opendeck
@@ -29,12 +30,30 @@ COPY . .
 RUN npm run build
 
 
-FROM node:24-alpine AS runtime
+# The PO token provider stays in this image and listens on loopback only, so
+# gated tracks get their proof-of-origin token without a second container, a
+# published port or a reachable hostname.
+FROM node:24-bookworm-slim AS pot-provider
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates python3 make g++ pkg-config \
+      libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch 2.0.2 https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git /src
+WORKDIR /src/server
+RUN npm ci --no-audit --no-fund && npx tsc
+
+
+FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production \
     PORT=4000 \
-    DATA_DIR=/data
+    DATA_DIR=/data \
+    POT_PROVIDER_URL=http://127.0.0.1:4416
+
+# wget backs the healthcheck below.
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+ && rm -rf /var/lib/apt/lists/*
 
 # Production dependencies only.
 COPY package.json package-lock.json ./
@@ -53,14 +72,21 @@ COPY --from=build /app/docs ./docs
 COPY --from=build /app/.env.example ./
 # Apache-2.0 requires LICENSE and NOTICE to ship with a binary distribution.
 COPY --from=build /app/LICENSE /app/NOTICE ./
+# Bundled token provider: built sources plus their production dependencies.
+COPY --from=pot-provider /src/server/build /opt/pot-provider/build
+COPY --from=pot-provider /src/server/node_modules /opt/pot-provider/node_modules
+COPY --from=pot-provider /src/server/package.json /opt/pot-provider/package.json
+
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # SQLite (and the generated dev secret, if ever created) live on a volume.
-RUN mkdir -p /data && chown -R node:node /app /data
+RUN mkdir -p /data && chown -R node:node /app /data /opt/pot-provider
 USER node
 
 EXPOSE 4000
-
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget -q -O /dev/null "http://127.0.0.1:${PORT}/healthz" || exit 1
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["node", "server/dist/index.js"]

@@ -25,7 +25,10 @@ let unavailableUntil = 0;
 
 export function potProviderUrl(): string | null {
   const raw = process.env.POT_PROVIDER_URL?.trim();
-  return raw ? raw.replace(/\/+$/, "") : null;
+  if (raw) return raw.replace(/\/+$/, "");
+  // The image ships the provider next to the app, so production defaults to
+  // loopback; local development stays opt-in.
+  return process.env.NODE_ENV === "production" ? "http://127.0.0.1:4416" : null;
 }
 
 /**
