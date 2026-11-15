@@ -108,39 +108,39 @@ export async function diagnosePot(
 ): Promise<Record<string, unknown>> {
   const bases = potProviderBases();
   if (bases.length === 0) return { configured: false };
-  try {
-    const response = await fetch(`${bases[0]}/get_pot`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content_binding: videoId, client }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    const text = await response.text();
-    let tokenLength = 0;
+
+  // Every base is reported: a single aggregated failure hides which one the
+  // server actually tried, which is the difference between a dead hostname and
+  // a provider that is not running.
+  const attempts: Array<Record<string, unknown>> = [];
+  for (const base of bases) {
     try {
-      const parsed = JSON.parse(text) as { poToken?: string; po_token?: string };
-      tokenLength = (parsed.poToken ?? parsed.po_token ?? "").length;
-    } catch {
-      // Report the raw body instead.
+      const response = await fetch(`${base}/get_pot`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content_binding: videoId, client }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      const text = await response.text();
+      let tokenLength = 0;
+      try {
+        const parsed = JSON.parse(text) as { poToken?: string; po_token?: string };
+        tokenLength = (parsed.poToken ?? parsed.po_token ?? "").length;
+      } catch {
+        // Report the raw body instead.
+      }
+      attempts.push({
+        base,
+        status: response.status,
+        tokenLength,
+        body: tokenLength ? undefined : text.slice(0, 300),
+      });
+    } catch (error) {
+      attempts.push({ base, error: error instanceof Error ? error.message : String(error) });
     }
-    return {
-      configured: true,
-      base: bases[0],
-      bases,
-      client,
-      status: response.status,
-      tokenLength,
-      body: tokenLength ? undefined : text.slice(0, 300),
-    };
-  } catch (error) {
-    return {
-      configured: true,
-      base: bases[0],
-      bases,
-      client,
-      error: error instanceof Error ? error.message : String(error),
-    };
   }
+
+  return { configured: true, client, bases, attempts };
 }
 
 /** Adds the token to a googlevideo url when one is available. */

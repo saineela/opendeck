@@ -51,8 +51,12 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     POT_PROVIDER_URL=http://127.0.0.1:4416
 
-# wget backs the healthcheck below.
-RUN apt-get update && apt-get install -y --no-install-recommends wget \
+# wget backs the healthcheck; the rest are the runtime libraries the bundled
+# provider's canvas build links against (the build stage installs the -dev
+# packages, which are not shipped here).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      wget libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libjpeg62-turbo \
+      libgif7 librsvg2-2 libfontconfig1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Production dependencies only.
