@@ -62,6 +62,48 @@ const PASSTHROUGH_HEADERS = [
   "etag",
 ] as const;
 
+/**
+ * Bytes googlevideo will serve for one resolved URL, keyed by its query.
+ *
+ * Some videos (label content, e.g. Panini `bG_NI-cCxDs`) are capped: the CDN
+ * serves roughly the first megabyte of the file and answers 403 for anything
+ * beyond it, on every fresh signature. The audio element treats that refusal
+ * as a fatal network error and abandons the megabyte it already buffered — the
+ * "plays a second then freezes" symptom. Declaring the served length as the
+ * resource length instead lets the element play everything it can get and end
+ * cleanly, and keeps the refusal out of the player's way.
+ */
+const servedLengths = new Map<string, number>();
+const SERVED_LENGTH_CACHE_MAX = 256;
+const TAIL_PROBE_TIMEOUT_MS = 4_000;
+
+async function servedContentLength(url: URL, declared: number): Promise<number> {
+  if (!Number.isSafeInteger(declared) || declared <= 0) return declared;
+  const key = url.search;
+  const cached = servedLengths.get(key);
+  if (cached !== undefined) return Math.min(cached, declared);
+
+  let total = declared;
+  try {
+    const tailStart = Math.max(0, declared - 64);
+    const response = await fetch(url, {
+      headers: { range: `bytes=${tailStart}-${declared - 1}` },
+      signal: AbortSignal.timeout(TAIL_PROBE_TIMEOUT_MS),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    // Only an explicit refusal shortens the resource; a transport hiccup is
+    // not proof that the rest of the file is missing.
+    if (response.status === 403) total = Math.min(declared, UPSTREAM_CHUNK_BYTES);
+  } catch {
+    return declared;
+  }
+
+  if (servedLengths.size >= SERVED_LENGTH_CACHE_MAX) servedLengths.clear();
+  servedLengths.set(key, total);
+  logger.info("media.stream served length", { declared, served: total });
+  return Math.min(total, declared);
+}
+
 function parseStreamUrl(raw: unknown): URL | null {
   if (typeof raw !== "string" || raw.length > 8192) return null;
   try {
@@ -185,8 +227,24 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
           ? req.headers["user-agent"]
           : "Mozilla/5.0",
     };
-    const range = req.headers.range;
-    upstreamHeaders.range = boundUpstreamRange(typeof range === "string" ? range : undefined);
+    // `clen` is the exact file length the player declared for this signature.
+    // Some videos are only served up to a point, so ask for no more than the
+    // CDN will hand over and describe the resource with that shorter length.
+    const declared = Number(url.searchParams.get("clen"));
+    const served = await servedContentLength(url, declared);
+    const bounded = boundUpstreamRange(
+      typeof req.headers.range === "string" ? req.headers.range : undefined,
+    );
+    const rangeStart = Number(/^bytes=(\d+)-/.exec(bounded)?.[1] ?? 0);
+    if (served > 0 && Number.isSafeInteger(rangeStart) && rangeStart >= served) {
+      res.status(416).setHeader("content-range", `bytes */${served}`);
+      res.end();
+      return;
+    }
+    upstreamHeaders.range = `bytes=${rangeStart}-${Math.min(
+      rangeStart + UPSTREAM_CHUNK_BYTES - 1,
+      (served > 0 ? served : rangeStart + UPSTREAM_CHUNK_BYTES) - 1,
+    )}`;
 
     let upstream: globalThis.Response;
     try {
@@ -236,6 +294,10 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
     for (const header of PASSTHROUGH_HEADERS) {
       const value = upstream.headers.get(header);
       if (value) res.setHeader(header, value);
+    }
+    if (served > 0 && served < declared) {
+      const contentRange = upstream.headers.get("content-range");
+      if (contentRange) res.setHeader("content-range", contentRange.replace(/\/\d+$/, `/${served}`));
     }
     res.setHeader("access-control-allow-origin", "*");
     res.setHeader("x-content-type-options", "nosniff");
