@@ -9,6 +9,7 @@ import { fetchAllowlisted } from "../services/safeFetch.js";
 import { recordPlay } from "../services/playHistory.js";
 import { resolveYouTubePlayback } from "../services/youtubePlayback.js";
 import { diagnosePot, getGvsToken, providerClientFor } from "../services/poTokenProvider.js";
+import { isInvidiousHost } from "../services/invidiousFallback.js";
 import { logger } from "../logger.js";
 
 /**
@@ -110,6 +111,9 @@ function parseStreamUrl(raw: unknown): URL | null {
   try {
     const url = new URL(raw);
     if (url.protocol !== "https:") return null;
+    // Mirror URLs from a configured Invidious instance are streamed through this
+    // relay too, so the client keeps one playback path.
+    if (isInvidiousHost(url.hostname)) return url;
     if (!isGooglevideoHost(url.hostname)) return null;
     if (url.pathname !== "/videoplayback") return null;
     return url;
@@ -275,11 +279,17 @@ export function createMediaRoutes(db: Db, config: ServerConfig): Router {
 
     let upstream: globalThis.Response;
     try {
-      upstream = await fetchAllowlisted(
-        url,
-        { headers: upstreamHeaders, signal: AbortSignal.timeout(60_000) },
-        { isAllowed: isMediaHopAllowed },
-      );
+      // Mirror hosts are not part of the YouTube allowlist, so they are fetched
+      // directly; the URL is still confined to the configured instance hosts by
+      // parseStreamUrl. Everything else keeps the allowlisted hop.
+      const fetchUpstream = (init: RequestInit) =>
+        isInvidiousHost(url.hostname)
+          ? fetch(url, init)
+          : fetchAllowlisted(url, init, { isAllowed: isMediaHopAllowed });
+      upstream = await fetchUpstream({
+        headers: upstreamHeaders,
+        signal: AbortSignal.timeout(60_000),
+      });
       if (upstream.status === 403) {
         // Retry once with YouTube origin headers; some googlevideo CDN nodes
         // reject bare server-side fetches without them.

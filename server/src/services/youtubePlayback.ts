@@ -4,6 +4,7 @@ import { getValidAccessToken } from "./youtubeAccount.js";
 import { buildYouTubeCookieHeaders, loadYouTubeCookies } from "./youtubeCookies.js";
 import { logger } from "../logger.js";
 import { attachPot, getGvsToken, providerClientFor } from "./poTokenProvider.js";
+import { resolveViaInvidious } from "./invidiousFallback.js";
 
 /**
  * Playback URL resolution for YouTube Music.
@@ -413,6 +414,22 @@ async function probeStreamUrl(
   }
 }
 
+/** Whether a signature serves its own tail; a capped one answers 403 there. */
+async function servesThrough(url: string): Promise<boolean> {
+  const clen = Number(new URL(url).searchParams.get("clen"));
+  if (!Number.isSafeInteger(clen) || clen <= 0) return true;
+  try {
+    const response = await fetch(url, {
+      headers: { range: `bytes=${Math.max(0, clen - 128)}-${clen - 1}` },
+      signal: AbortSignal.timeout(4_000),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return response.ok;
+  } catch {
+    return true;
+  }
+}
+
 export async function resolveYouTubePlayback(
   db: Db,
   config: ServerConfig,
@@ -566,6 +583,18 @@ export async function resolveYouTubePlayback(
           }
           continue;
         }
+        // A signature that answers 403 at its own tail is capped: the track
+        // would stop a minute in. Prefer a mirror that proxies the whole file.
+        if (!(await servesThrough(securedUrl))) {
+          const mirror = await resolveViaInvidious(videoId);
+          if (mirror) {
+            logger.info("youtube.playback via mirror", { userId, videoId, base: mirror.url.slice(0, 40) });
+            return {
+              ok: true,
+              playback: { url: mirror.url, mimeType: mirror.mimeType, itag: null, via: credential },
+            };
+          }
+        }
         logger.info("youtube.playback resolved", {
           userId,
           videoId,
@@ -631,6 +660,16 @@ export async function resolveYouTubePlayback(
     playabilities: [...playabilities],
     attempts,
   });
+
+  // Nothing in the ladder produced a playable signature: a mirror may still.
+  const mirror = await resolveViaInvidious(videoId);
+  if (mirror) {
+    logger.info("youtube.playback via mirror after ladder", { userId, videoId });
+    return {
+      ok: true,
+      playback: { url: mirror.url, mimeType: mirror.mimeType, itag: null, via: "anonymous" },
+    };
+  }
 
   return { ok: false, status, reason, attempts };
 }
